@@ -5,6 +5,7 @@ __pycache__/
 knowledge_base/*.json
 user_model/*.json
 user_model/*.jsonl
+user_model/notes/
 papers/*
 !papers/.gitkeep
 !user_model/.gitkeep

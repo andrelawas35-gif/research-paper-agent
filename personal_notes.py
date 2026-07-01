@@ -1,8 +1,8 @@
 """Local personal-note storage for the research paper agent.
 
-This module owns durable JSONL records, simple lexical search, soft-delete
-support, and conservative on-save extraction. Markdown mirrors and graph
-integration come later.
+This module owns durable JSONL records, Markdown mirrors, simple lexical
+search, soft-delete support, and conservative on-save extraction. Graph
+integration comes later.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from typing import Any
 APP_DIR = Path(__file__).resolve().parent
 USER_MODEL_DIR = APP_DIR / "user_model"
 PERSONAL_NOTES_PATH = USER_MODEL_DIR / "personal_notes.jsonl"
+MARKDOWN_NOTES_DIR_NAME = "notes"
 
 STOPWORDS = {
     "about",
@@ -81,6 +82,10 @@ def _note_store_path(path: Path | None = None) -> Path:
     return path or PERSONAL_NOTES_PATH
 
 
+def _markdown_notes_dir(path: Path | None = None) -> Path:
+    return _note_store_path(path).parent / MARKDOWN_NOTES_DIR_NAME
+
+
 def _split_csv(value: str | list[str] | None) -> list[str]:
     if value is None:
         return []
@@ -127,6 +132,91 @@ def _next_note_id(notes: list[dict[str, Any]], now: str) -> str:
         if suffix.isdigit():
             max_seen = max(max_seen, int(suffix))
     return f"{prefix}{max_seen + 1:03d}"
+
+
+def _slugify(value: str, fallback: str = "note") -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", value.lower()).strip("-")
+    if not slug:
+        slug = fallback
+    return slug[:64].strip("-") or fallback
+
+
+def _markdown_path_for_note(note: dict[str, Any], path: Path | None = None) -> tuple[str, Path]:
+    slug = _slugify(str(note.get("title", "")), fallback=str(note.get("note_id", "note")))
+    file_name = f"{note['note_id']}-{slug}.md"
+    relative_path = f"{MARKDOWN_NOTES_DIR_NAME}/{file_name}"
+    return relative_path, _markdown_notes_dir(path) / file_name
+
+
+def _yaml_list(values: list[str]) -> str:
+    if not values:
+        return "[]"
+    return "\n" + "\n".join(f"  - {json.dumps(value)}" for value in values)
+
+
+def _frontmatter_value(value: Any) -> str:
+    if value is None:
+        return "null"
+    return json.dumps(value)
+
+
+def _format_markdown_mirror(note: dict[str, Any]) -> str:
+    cards = [
+        card for card in note.get("cards", [])
+        if not card.get("rejected")
+    ]
+    lines = [
+        "---",
+        f"schema_version: {note.get('schema_version', 1)}",
+        f"note_id: {_frontmatter_value(note.get('note_id'))}",
+        f"title: {_frontmatter_value(note.get('title'))}",
+        f"created_at: {_frontmatter_value(note.get('created_at'))}",
+        f"updated_at: {_frontmatter_value(note.get('updated_at'))}",
+        f"deleted_at: {_frontmatter_value(note.get('deleted_at'))}",
+        f"user_tags: {_yaml_list(note.get('user_tags', []))}",
+        f"suggested_tags: {_yaml_list(note.get('suggested_tags', []))}",
+        f"concepts: {_yaml_list(note.get('concepts', []))}",
+        "---",
+        "",
+        f"# {note.get('title', 'Untitled note')}",
+        "",
+        "## Original Note",
+        "",
+        str(note.get("text", "")).strip(),
+        "",
+        "## Note Cards",
+        "",
+    ]
+
+    if cards:
+        for card in cards:
+            lines.append(f"- [{card.get('card_id')}] {card.get('text', '')}")
+            concepts = card.get("concepts", [])
+            if concepts:
+                lines.append(f"  - Concepts: {', '.join(concepts)}")
+    else:
+        lines.append("_No reusable cards extracted._")
+
+    lines.extend(["", "## Concepts", ""])
+    concepts = note.get("concepts", [])
+    if concepts:
+        lines.extend(f"- {concept}" for concept in concepts)
+    else:
+        lines.append("_No concepts extracted._")
+
+    lines.extend(["", "## Related Links", "", "_Graph-derived links will appear in a later slice._", ""])
+    return "\n".join(lines)
+
+
+def _write_markdown_mirror(note: dict[str, Any], path: Path | None = None) -> dict[str, Any]:
+    relative_path, markdown_path = _markdown_path_for_note(note, path)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.write_text(_format_markdown_mirror(note), encoding="utf-8")
+    note["markdown_path"] = relative_path
+    return {
+        "markdown_path": relative_path,
+        "markdown_full_path": str(markdown_path),
+    }
 
 
 def _sentences(text: str) -> list[str]:
@@ -304,12 +394,14 @@ def save_note(
         "markdown_path": None,
         "versions": [],
     }
+    mirror = _write_markdown_mirror(note, path)
     notes.append(note)
     _write_notes(notes, path)
     return {
         "status": "ok",
         "note_id": note["note_id"],
         "notes_path": str(_note_store_path(path)),
+        **mirror,
         "note": note,
     }
 
@@ -402,6 +494,7 @@ def soft_delete_note(note_id: str, path: Path | None = None) -> dict[str, Any]:
             return {"status": "ok", "changed": False, "note": note}
         note["deleted_at"] = now
         note["updated_at"] = now
+        mirror = _write_markdown_mirror(note, path)
         _write_notes(notes, path)
-        return {"status": "ok", "changed": True, "note": note}
+        return {"status": "ok", "changed": True, **mirror, "note": note}
     return {"status": "error", "message": f"Note not found: {note_id}"}

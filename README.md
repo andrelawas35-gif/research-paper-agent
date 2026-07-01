@@ -107,7 +107,7 @@ The profile is inspectable at `user_model/profile.json`. Interaction logs are wr
 
 ## Personal Notes
 
-The agent saves personal notes only when you explicitly ask, using prompts like `note:`, `save note:`, or `remember note:`. Notes are local JSONL records in `user_model/personal_notes.jsonl` and are treated as your knowledge/context, not as cited paper evidence.
+The agent saves personal notes only when you explicitly ask, using prompts like `note:`, `save note:`, or `remember note:`. Notes are local JSONL records in `user_model/personal_notes.jsonl` and are treated as your knowledge/context, not as cited paper evidence. JSONL stays canonical; Markdown mirrors are written under `user_model/notes/` for reading and Obsidian-style browsing.
 
 On save, the agent performs conservative local extraction:
 

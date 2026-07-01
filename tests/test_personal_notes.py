@@ -34,12 +34,38 @@ def test_save_note_creates_schema_record(tmp_path: Path):
     assert note["cards"][0]["rejected"] is False
     assert note["concepts"][:2] == ["concept graph", "personal notes"]
     assert note["candidate_signals"] == []
-    assert note["markdown_path"] is None
+    assert note["markdown_path"].startswith("notes/")
     assert note["versions"] == []
 
     lines = path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0])["note_id"] == result["note_id"]
+    assert json.loads(lines[0])["markdown_path"] == note["markdown_path"]
+
+
+def test_save_note_writes_markdown_mirror(tmp_path: Path):
+    from research_paper_agent import personal_notes
+
+    path = tmp_path / "personal_notes.jsonl"
+
+    result = personal_notes.save_note(
+        "Markdown mirrors should be regenerated from canonical JSONL records.",
+        title="Mirror note",
+        user_tags="obsidian",
+        concepts="markdown mirror",
+        path=path,
+    )
+
+    markdown_path = tmp_path / result["note"]["markdown_path"]
+    content = markdown_path.read_text(encoding="utf-8")
+
+    assert result["markdown_full_path"] == str(markdown_path)
+    assert content.startswith("---\n")
+    assert 'note_id: "' + result["note_id"] + '"' in content
+    assert 'title: "Mirror note"' in content
+    assert "- [card_001] Markdown mirrors should be regenerated from canonical JSONL records." in content
+    assert "- markdown mirror" in content
+    assert "## Related Links" in content
 
 
 def test_save_note_derives_title_and_incrementing_ids(tmp_path: Path):
@@ -130,6 +156,10 @@ def test_soft_deleted_notes_are_hidden_from_list_and_search(tmp_path: Path):
     recovered = personal_notes.get_note(saved["note_id"], path=path, include_deleted=True)
     assert recovered["status"] == "ok"
     assert recovered["note"]["deleted_at"] is not None
+
+    markdown_path = tmp_path / recovered["note"]["markdown_path"]
+    content = markdown_path.read_text(encoding="utf-8")
+    assert "deleted_at: null" not in content
 
 
 def test_agent_personal_note_wrappers_use_user_model_path():
