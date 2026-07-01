@@ -1678,7 +1678,10 @@ root_agent = Agent(
         "adaptive_grill and ask only its first_question. After the user answers, call "
         "respond_to_adaptive_grill before giving the next recommendation. "
         "If papers have not been ingested, ask the user to add files or call "
-        "ingest_all_papers when they ask to read the folder. Keep answers structured, "
+        "ingest_all_papers when they ask to read the folder. Before concluding "
+        "nothing is ingested, always check first: call list_concepts or "
+        "paper_brief to see what's already in the knowledge base — papers "
+        "persist across sessions and do not need to be re-ingested. Keep answers structured, "
         "grounded, adaptive, and appropriately detailed."
     ),
     tools=[
