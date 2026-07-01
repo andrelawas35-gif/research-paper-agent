@@ -1,0 +1,24 @@
+[Unit]
+Description=Research Paper Agent Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/research_paper_agent
+EnvironmentFile=/home/ubuntu/research_paper_agent/.env
+ExecStart=/home/ubuntu/research_paper_agent/.venv/bin/python discord_bot.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/ubuntu/research_paper_agent/logs/bot.log
+StandardError=append:/home/ubuntu/research_paper_agent/logs/bot_error.log
+
+# Security hardening (optional — uncomment if comfortable)
+# NoNewPrivileges=yes
+# ProtectSystem=strict
+# ProtectHome=read-only
+# ReadWritePaths=/home/ubuntu/research_paper_agent/.adk /home/ubuntu/research_paper_agent/logs /home/ubuntu/research_paper_agent/knowledge_base /home/ubuntu/research_paper_agent/user_model
+
+[Install]
+WantedBy=multi-user.target

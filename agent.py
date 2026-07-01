@@ -1367,35 +1367,428 @@ def delete_personal_note(note_id: str) -> dict[str, Any]:
     return personal_notes.soft_delete_note(note_id=note_id, path=PERSONAL_NOTES_PATH)
 
 
-def self_improvement_audit() -> dict[str, Any]:
-    """Review the user model and suggest how the agent should adapt next."""
-    profile = _load_user_profile()
-    interaction_count = 0
-    if INTERACTION_LOG_PATH.exists():
-        interaction_count = sum(1 for _ in INTERACTION_LOG_PATH.open("r", encoding="utf-8"))
+# ── ADR 0028 + 0035: Note editing, versioning, corrections ─────────────
 
-    profile_gaps = []
-    for bucket in ["interests", "style_preferences", "question_patterns", "grammar_and_quirks"]:
-        if not profile.get(bucket):
-            profile_gaps.append(f"No entries yet for {bucket}.")
 
-    recommendations = [
-        "Call get_user_profile before tailoring answers to the user.",
-        "Call learn_from_user_message when the user expresses a new interest, correction, or recurring workflow.",
-        "Call set_user_preference when the user gives explicit feedback about tone, format, or behavior.",
-        "Use concrete commands for operational questions, but give fuller answers for research synthesis, recommendations, and personality-shaped guidance.",
+def edit_personal_note(
+    note_id: str,
+    text: str = "",
+    title: str = "",
+    user_tags: str | list[str] | None = None,
+    concepts: str | list[str] | None = None,
+) -> dict[str, Any]:
+    """Edit a personal note. Previous state is preserved as a version entry."""
+    result = personal_notes.edit_personal_note(
+        note_id=note_id, text=text, title=title,
+        user_tags=user_tags, concepts=concepts,
+        path=PERSONAL_NOTES_PATH,
+    )
+    # ADR 0040: refresh graph signals so note edges don't decay.
+    if result.get("status") == "ok":
+        try:
+            concept_graph.refresh_note_signal(note_id)
+        except Exception:
+            pass
+    return result
+
+
+def reject_note_card(note_id: str, card_index: int) -> dict[str, Any]:
+    """Reject an extracted Note Card by its 0-based index."""
+    return personal_notes.reject_note_card(
+        note_id=note_id, card_index=card_index, path=PERSONAL_NOTES_PATH,
+    )
+
+
+def reject_note_concept(note_id: str, concept_name: str) -> dict[str, Any]:
+    """Reject a linked Concept from a personal note."""
+    return personal_notes.reject_note_concept(
+        note_id=note_id, concept_name=concept_name, path=PERSONAL_NOTES_PATH,
+    )
+
+
+# ── ADR 0027 + 0031 + 0032: Backlinks, markdown, import ───────────────
+
+
+def get_note_backlinks(note_id: str) -> dict[str, Any]:
+    """Return notes that share concepts with this note (concept-derived backlinks)."""
+    return personal_notes.get_backlinks(note_id=note_id, path=PERSONAL_NOTES_PATH)
+
+
+def render_note_markdown(note_id: str) -> dict[str, Any]:
+    """Return the full Markdown mirror for a personal note."""
+    return personal_notes.render_note_markdown(note_id=note_id, path=PERSONAL_NOTES_PATH)
+
+
+def import_markdown_notes() -> dict[str, Any]:
+    """Sync Markdown mirror edits back into the canonical JSONL store."""
+    return personal_notes.import_markdown_notes(path=PERSONAL_NOTES_PATH)
+
+
+# ── ADR 0013: Session goal inference ────────────────────────────────────
+
+
+def _infer_session_goal(message: str) -> dict[str, Any]:
+    """Infer the user's session goal from their first message.
+
+    Returns a structured goal with a label and confidence.  The agent
+    instruction says to infer by default and ask one clarifying question
+    only when ambiguity would materially change the output.
+    """
+    lower = message.lower()
+    patterns = [
+        ("paper ingestion", ["ingest", "read the paper", "add paper", "load paper"]),
+        ("evidence search", ["search for", "find evidence", "what does the paper say", "look up"]),
+        ("paper comparison", ["compare", "difference between", "versus", "vs"]),
+        ("study / learning", ["study guide", "quiz", "teach me", "explain", "recall"]),
+        ("personalization", ["remember", "prefer", "my style", "about me", "profile"]),
+        ("note management", ["note:", "save note", "my notes", "search notes", "edit note"]),
+        ("knowledge audit", ["audit", "what do you know", "self audit", "inspect"]),
+        ("grill / questioning", ["grill", "question me", "ask me"]),
     ]
-    if interaction_count < 5:
-        recommendations.append("Record more interactions before drawing strong conclusions about quirks.")
+    for label, triggers in patterns:
+        if any(t in lower for t in triggers):
+            return {"session_goal": label, "confidence": 0.8, "source": "keyword_match"}
+
+    return {"session_goal": "general exploration", "confidence": 0.4, "source": "no_strong_signal"}
+
+
+# ── ADR 0045 + 0046: Knowledge loop coordination ───────────────────────
+
+
+def _knowledge_loop_update(source: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Route a signal from any input channel to the appropriate state store.
+
+    Called automatically by interaction handlers (grill, tutor, notes,
+    profile updates).  This is the coordination point for the Self-Learning
+    Knowledge Loop — it ensures signals flow to the right place without
+    duplicating routing logic across handlers.
+    """
+    now = _now_iso()
+    routed: list[str] = []
+
+    # ── explicit preferences → profile.json (durable, user-gated) ──
+    if source == "explicit_preference":
+        set_user_preference(
+            category=payload.get("category", "style"),
+            value=payload.get("value", ""),
+            source=payload.get("source", "")[:400],
+            confidence=payload.get("confidence", 0.8),
+        )
+        routed.append("profile.json")
+
+    # ── inferred patterns → candidate_signals.jsonl (automatic, weak) ──
+    if source in ("grill_answer", "interaction", "note_signal", "tutor_answer"):
+        signals = _infer_message_signals(payload.get("text", ""))
+        if signals:
+            _record_candidate_signals({
+                "timestamp": now,
+                "source": source,
+                "signals": signals,
+                "context": payload.get("context", "")[:300],
+            })
+            routed.append("candidate_signals.jsonl")
+
+    # ── concept engagement → concept_graph (automatic weight updates) ──
+    if source in ("grill_answer", "tutor_answer", "note_save"):
+        for concept_name in payload.get("concepts", []):
+            for interest in _load_user_profile().get("interests", []):
+                interest_name = interest.get("name", "")
+                if interest_name:
+                    try:
+                        concept_graph.link(
+                            interest_name, concept_name, source,
+                            edge_type="engaged" if source != "note_save" else "note",
+                        )
+                    except Exception:
+                        pass
+        routed.append("concept_graph")
+
+    # ── note interaction → refresh note signal (ADR 0040) ──
+    if source == "note_edit" and payload.get("note_id"):
+        try:
+            concept_graph.refresh_note_signal(payload["note_id"])
+            routed.append("note_signal_refresh")
+        except Exception:
+            pass
 
     return {
-        "profile_path": str(USER_PROFILE_PATH),
-        "interaction_log_path": str(INTERACTION_LOG_PATH),
-        "interaction_count": interaction_count,
-        "profile_gaps": profile_gaps,
-        "recommendations": recommendations,
-        "current_adaptation_rules": profile.get("adaptation_rules", []),
+        "status": "ok",
+        "source": source,
+        "routed_to": routed,
+        "timestamp": now,
     }
+
+
+def knowledge_self_audit() -> dict[str, Any]:
+    """Inspectable view of what the agent has learned across all knowledge channels.
+
+    Surfaces confirmed preferences, candidate (inferred) signals, concept-graph
+    health, tutor mastery, note-derived signals, and available correction actions.
+    """
+    profile = _load_user_profile()
+    now = _now_iso()
+
+    # ── confirmed preferences ──────────────────────────────────────────
+    confirmed = {
+        "preferences": [
+            {"type": "style", "value": p.get("preference", ""), "source": p.get("source", "")[:200]}
+            for p in profile.get("style_preferences", [])
+        ],
+        "avoidances": [
+            {"type": "avoidance", "value": a.get("preference", ""), "source": a.get("source", "")[:200]}
+            for a in profile.get("avoidances", [])
+        ],
+        "interests": [
+            {"name": i.get("name", ""), "confidence": i.get("confidence", 0.0), "evidence": i.get("evidence", "")[:200]}
+            for i in profile.get("interests", [])
+        ],
+        "adaptation_rules": profile.get("adaptation_rules", []),
+    }
+
+    # ── candidate signals ──────────────────────────────────────────────
+    candidate_signals: list[dict[str, Any]] = []
+    candidate_count = 0
+    if CANDIDATE_SIGNALS_PATH.exists():
+        try:
+            raw = [json.loads(line) for line in CANDIDATE_SIGNALS_PATH.open("r", encoding="utf-8") if line.strip()]
+            candidate_count = len(raw)
+            # Show the 8 most recent + most frequent signal types.
+            signal_types: Counter = Counter()
+            for entry in raw[-40:]:
+                for sig in entry.get("signals", []):
+                    signal_types[sig.get("type", "unknown")] += 1
+            candidate_signals = [
+                {"type": st, "count": c, "status": "candidate — not yet confirmed"}
+                for st, c in signal_types.most_common(8)
+            ]
+        except Exception:
+            candidate_signals = [{"error": "Could not parse candidate signals file."}]
+
+    # ── concept graph health ───────────────────────────────────────────
+    concept_health: dict[str, Any] = {"strongest": [], "stale": [], "rejected": [], "merge_suggestions": []}
+    try:
+        graph = concept_graph.get_concept_graph()
+        nodes = graph.get("nodes", [])
+        edges = graph.get("edges", [])
+        # Strongest: top 5 by weight.
+        ranked = sorted(nodes, key=lambda n: n.get("weight", 0.0), reverse=True)
+        concept_health["strongest"] = [
+            {"name": n["name"], "weight": n.get("weight", 0.0), "sources": n.get("sources", [])}
+            for n in ranked[:5] if n.get("weight", 0) > 0
+        ]
+        # Stale: concepts with weight < 0.3 that haven't been updated recently.
+        concept_health["stale"] = [
+            {"name": n["name"], "weight": n.get("weight", 0.0)}
+            for n in nodes if 0 < n.get("weight", 0) < 0.3
+        ][:5]
+        # Rejected: concepts marked as rejected.
+        concept_health["rejected"] = [
+            {"name": n["name"]} for n in nodes if n.get("rejected")
+        ][:5]
+        # Merge suggestions: concepts that share many edges with each other.
+        name_to_neighbors: dict[str, set[str]] = defaultdict(set)
+        for edge in edges:
+            src = edge.get("source", "")
+            tgt = edge.get("target", "")
+            if src and tgt:
+                name_to_neighbors[src].add(tgt)
+                name_to_neighbors[tgt].add(src)
+        seen_pairs: set[tuple[str, str]] = set()
+        for name_a, neighbors_a in name_to_neighbors.items():
+            for name_b, neighbors_b in name_to_neighbors.items():
+                if name_a >= name_b:
+                    continue
+                pair = (name_a, name_b)
+                if pair in seen_pairs:
+                    continue
+                overlap = neighbors_a & neighbors_b
+                if len(overlap) >= 3:
+                    seen_pairs.add(pair)
+                    concept_health["merge_suggestions"].append({
+                        "concept_a": name_a, "concept_b": name_b,
+                        "shared_neighbors": sorted(overlap)[:5],
+                        "rationale": f"Share {len(overlap)} neighbor concepts — consider merging.",
+                    })
+        concept_health["merge_suggestions"] = concept_health["merge_suggestions"][:5]
+    except Exception:
+        concept_health = {"error": "Concept graph not available or unreadable."}
+
+    # ── tutor state ────────────────────────────────────────────────────
+    tutor_state: dict[str, Any] = {"mastered": [], "weak": [], "total_concepts": 0}
+    try:
+        progress = _load_tutor_progress()
+        concepts = progress.get("concepts", {})
+        tutor_state["total_concepts"] = len(concepts)
+        for key, entry in concepts.items():
+            asked = max(entry.get("times_asked", 0), 1)
+            ratio = entry.get("times_correct", 0) / asked
+            if ratio >= 0.8:
+                tutor_state["mastered"].append({"concept": key, "ratio": round(ratio, 2)})
+            elif asked >= 2 and ratio < 0.5:
+                tutor_state["weak"].append({"concept": key, "ratio": round(ratio, 2), "asked": asked})
+        tutor_state["mastered"] = sorted(tutor_state["mastered"], key=lambda c: c["ratio"], reverse=True)[:8]
+        tutor_state["weak"] = sorted(tutor_state["weak"], key=lambda c: c["ratio"])[:8]
+    except Exception:
+        tutor_state = {"error": "Tutor progress unavailable."}
+
+    # ── note-derived signals ───────────────────────────────────────────
+    note_signals: dict[str, Any] = {"total_notes": 0, "recent_concepts": []}
+    try:
+        all_notes = personal_notes.list_notes(
+            path=PERSONAL_NOTES_PATH
+        ).get("notes", [])
+        note_signals["total_notes"] = len(all_notes)
+        note_concepts: Counter = Counter()
+        for n in all_notes[-30:]:
+            for c in n.get("concepts", []):
+                note_concepts[c] += 1
+        note_signals["recent_concepts"] = [
+            {"concept": c, "note_count": cnt} for c, cnt in note_concepts.most_common(8)
+        ]
+    except Exception:
+        note_signals = {"error": "Personal notes unavailable."}
+
+    # ── interaction summary ────────────────────────────────────────────
+    interaction_summary: dict[str, Any] = {"total": 0, "recent_tags": []}
+    if INTERACTION_LOG_PATH.exists():
+        try:
+            interactions = [
+                json.loads(line) for line in INTERACTION_LOG_PATH.open("r", encoding="utf-8") if line.strip()
+            ]
+            interaction_summary["total"] = len(interactions)
+            tag_counts: Counter = Counter()
+            for entry in interactions[-50:]:
+                for tag in entry.get("tags", "").split(","):
+                    tag = tag.strip()
+                    if tag:
+                        tag_counts[tag] += 1
+            interaction_summary["recent_tags"] = [
+                {"tag": t, "count": c} for t, c in tag_counts.most_common(8)
+            ]
+        except Exception:
+            interaction_summary = {"error": "Interaction log unreadable."}
+
+    # ── correction actions available ───────────────────────────────────
+    correction_actions = [
+        {
+            "action": "confirm_signal",
+            "description": "Promote a candidate signal to a durable preference, interest, or rule.",
+            "example": 'self_audit_correction(action="confirm_signal", target="interest:knowledge graphs", reason="Repeated interest across 3+ sessions")',
+        },
+        {
+            "action": "reject_signal",
+            "description": "Mark a candidate signal as rejected so it stops resurfacing in audits.",
+            "example": 'self_audit_correction(action="reject_signal", target="signal:verbose_explanations", reason="User explicitly said they want brevity")',
+        },
+        {
+            "action": "downgrade_preference",
+            "description": "Reduce the weight of an over-promoted preference that no longer fits.",
+            "example": 'self_audit_correction(action="downgrade_preference", target="preference:long form answers", reason="User has shifted to mobile use")',
+        },
+        {
+            "action": "suppress_concept",
+            "description": "Suppress a concept in graph ranking so it stops influencing recommendations.",
+            "example": 'self_audit_correction(action="suppress_concept", target="concept:outdated_method", reason="Method superseded by newer paper")',
+        },
+    ]
+
+    return {
+        "audit_generated_at": now,
+        "confirmed": confirmed,
+        "candidate_signals": {
+            "count": candidate_count,
+            "top_types": candidate_signals,
+            "path": str(CANDIDATE_SIGNALS_PATH),
+        },
+        "concept_graph": concept_health,
+        "tutor_state": tutor_state,
+        "notes": note_signals,
+        "interaction_summary": interaction_summary,
+        "correction_actions_available": correction_actions,
+    }
+
+
+def self_audit_correction(action: str, target: str, reason: str = "") -> dict[str, Any]:
+    """Apply a user-directed correction to the knowledge model.
+
+    Supported actions:
+      - confirm_signal:   Promote a candidate signal to a durable preference.
+      - reject_signal:    Reject a candidate signal so it stops resurfacing.
+      - downgrade_preference:  Reduce weight of an over-promoted preference.
+      - suppress_concept: Suppress a concept in graph ranking.
+    """
+    valid_actions = {"confirm_signal", "reject_signal", "downgrade_preference", "suppress_concept"}
+    if action not in valid_actions:
+        return {"status": "error", "message": f"Unknown action '{action}'. Valid: {sorted(valid_actions)}"}
+
+    profile = _load_user_profile()
+    now = _now_iso()
+
+    if action == "confirm_signal":
+        # Parse target: "interest:X" or "style:X" or "rule:X"
+        if ":" in target:
+            category, value = target.split(":", 1)
+        else:
+            category, value = "interest", target
+
+        if category == "interest":
+            existing = [i for i in profile.get("interests", []) if i.get("name", "").lower() == value.lower()]
+            if existing:
+                existing[0]["confidence"] = min(1.0, existing[0].get("confidence", 0.5) + 0.2)
+                existing[0]["evidence"] = f"{existing[0].get('evidence', '')}; confirmed via audit correction: {reason}"[:400]
+            else:
+                profile.setdefault("interests", []).append({
+                    "name": value, "confidence": 0.85,
+                    "evidence": f"Confirmed via audit correction: {reason}"[:400],
+                })
+        elif category in ("style", "preference"):
+            profile.setdefault("style_preferences", []).append({
+                "preference": value, "source": f"Audit correction: {reason}"[:400],
+            })
+        elif category == "rule":
+            profile.setdefault("adaptation_rules", []).append({
+                "rule": value, "source": f"Audit correction: {reason}"[:400],
+                "confirmed_at": now,
+            })
+
+        profile["updated_at"] = now
+        _save_user_profile(profile)
+        return {"status": "ok", "action": "confirm_signal", "target": target, "reason": reason}
+
+    if action == "reject_signal":
+        # Record rejection so the signal type stops resurfacing.
+        rejection = {
+            "timestamp": now,
+            "target": target,
+            "reason": reason,
+            "action": "rejected",
+        }
+        _ensure_dirs()
+        with CANDIDATE_SIGNALS_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(rejection) + "\n")
+        return {"status": "ok", "action": "reject_signal", "target": target, "reason": reason}
+
+    if action == "downgrade_preference":
+        # Lower confidence on a matching preference/interest.
+        for bucket in ["interests", "style_preferences"]:
+            for item in profile.get(bucket, []):
+                name = item.get("name") or item.get("preference", "")
+                if target.lower() in name.lower():
+                    item["confidence"] = max(0.1, item.get("confidence", 0.5) - 0.3)
+                    item["downgraded_at"] = now
+                    item["downgrade_reason"] = reason[:300]
+        profile["updated_at"] = now
+        _save_user_profile(profile)
+        return {"status": "ok", "action": "downgrade_preference", "target": target, "reason": reason}
+
+    if action == "suppress_concept":
+        try:
+            concept_graph.reject_concept(target, reason)
+        except Exception:
+            pass  # best-effort — graph may not have a reject_concept method yet
+        return {"status": "ok", "action": "suppress_concept", "target": target, "reason": reason}
+
+    return {"status": "error", "message": "Unhandled action."}
 
 
 def adaptive_grill(topic: str = "", source: str = "", question_count: int = 5) -> dict[str, Any]:
@@ -1412,6 +1805,24 @@ def adaptive_grill(topic: str = "", source: str = "", question_count: int = 5) -
 
     profile_summary = _profile_signal_summary(profile)
     cards = _note_cards_for_records(records)
+
+    # --- ADR 0026: note-guided questioning — boost with personal note concepts ---
+    note_concepts: list[str] = []
+    try:
+        note_list = personal_notes.list_notes(path=PERSONAL_NOTES_PATH).get("notes", [])
+        for n in note_list[-20:]:
+            note_concepts.extend(n.get("concepts", []))
+        # Deduplicate and keep top 15.
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for c in note_concepts:
+            key = c.lower()
+            if key not in seen:
+                seen.add(key)
+                deduped.append(c)
+        note_concepts = deduped[:15]
+    except Exception:
+        pass
 
     # --- concept graph: rank cards by user-interest weight ---
     try:
@@ -1495,6 +1906,21 @@ def adaptive_grill(topic: str = "", source: str = "", question_count: int = 5) -
                     profile_signal=style.get("preference", ""),
                 )
             )
+
+    # --- ADR 0026: note-guided questions ---
+    for concept in note_concepts:
+        if len(questions) >= max_questions:
+            break
+        questions.append(
+            _adaptive_question(
+                f"Q{len(questions)+1:03d}",
+                f"Your notes mention '{concept}'. Has anything in these papers changed "
+                "your thinking about it?",
+                "If yes, save an updated note with your new perspective.",
+                f"Your personal notes connect this concept to your research interests.",
+                profile_signal=concept,
+            )
+        )
 
     if len(questions) < max_questions:
         questions.append(
@@ -1939,6 +2365,18 @@ root_agent = Agent(
         "as a note. Use list_personal_notes, get_personal_note, and "
         "search_personal_notes when the user asks about their notes. Treat personal "
         "notes as the user's knowledge/context, not as source-backed paper evidence. "
+        "Edit notes with edit_personal_note, reject incorrect cards with "
+        "reject_note_card, and remove misleading concepts with reject_note_concept. "
+        "Use get_note_backlinks to discover notes that share concepts — the backlinks "
+        "are derived from the Concept Graph, not manual wiki-links. "
+        "When answering with both papers and personal notes, separate your output "
+        "into three labeled lanes: **Evidence** (cited paper passages), "
+        "**Your Notes** (relevant personal notes and cards), and **Inference** "
+        "(your synthesis, clearly labeled as inferential). "
+        "Adapt across three separate dimensions per concept: content_selection "
+        "(what to show), explanation_style (how to explain), and challenge_level "
+        "(difficulty of questions). A user may want concise answers about one "
+        "topic but deeper scaffolding on another — do not use one global setting. "
         "Separate source-backed "
         "claims from your own inference. Before giving a personalized recommendation "
         "from a paper, establish at least one cited source-backed claim first; label "
@@ -1960,17 +2398,27 @@ root_agent = Agent(
         "notes, open questions, agent-building ideas, a reading queue, or user-model "
         "updates. Ask before creating artifacts, but make the offer specific by naming "
         "the exact artifact shape. "
-        "Support explicit modes when the user names them: Reader Mode means faithful "
-        "source understanding; Grill Mode means one pointed adaptive question at a time; "
-        "Builder Mode means turn research into agent/tool/workflow ideas; Taste Mode "
-        "means judge skim/study/compare/discard; Artifact Mode means create confirmed "
-        "durable outputs; Profile Mode means inspect or update the user model; "
-        "Tutor Mode means teach paper concepts through an explain-then-quiz loop "
-        "with adaptive curriculum. In Tutor Mode, use search_evidence to find a "
-        "cited passage, explain the concept, ask one question via adaptive_grill, "
-        "then call record_tutor_answer to grade the response and suggest the next "
-        "concept. Alternate between drilling weak concepts and exploring high-interest "
-        "ones; let the user steer at any point. "
+        "Support explicit modes when the user names them. Detect the mode from "
+        "the first message and switch posture accordingly — do not wait for "
+        "the user to repeat the mode name. "
+        "Reader Mode means faithful source understanding; Grill Mode means one "
+        "pointed adaptive question at a time; Builder Mode means turn research "
+        "into agent/tool/workflow ideas; Taste Mode means judge skim/study/"
+        "compare/discard; Artifact Mode means create confirmed durable outputs; "
+        "Profile Mode means inspect or update the user model; Tutor Mode means "
+        "teach paper concepts through an explain-then-quiz loop with adaptive "
+        "curriculum. In Tutor Mode, use search_evidence to find a cited passage, "
+        "explain the concept, ask one question via adaptive_grill, then call "
+        "record_tutor_answer to grade the response and suggest the next concept. "
+        "Alternate between drilling weak concepts and exploring high-interest ones; "
+        "let the user steer at any point. "
+        "When the user asks for an audit of what you've learned about them, call "
+        "knowledge_self_audit to produce the full inspectable view — confirmed "
+        "preferences, candidate signals, concept graph health, tutor mastery, and "
+        "note-derived signals. Present the audit with the correction actions listed "
+        "at the bottom so the user can steer: confirm a signal, reject one, downgrade "
+        "a preference, or suppress a concept. Call self_audit_correction only when "
+        "the user explicitly asks to apply one of those actions. "
         "Prioritize the current session goal over the long-term user profile; use the "
         "profile to shape style and suggestions, then include adjacent possibilities "
         "only after the session goal is served. Infer the session goal by default; "
@@ -2001,8 +2449,14 @@ root_agent = Agent(
         "ingest_all_papers when they ask to read the folder. Before concluding "
         "nothing is ingested, always check first: call list_concepts or "
         "paper_brief to see what's already in the knowledge base — papers "
-        "persist across sessions and do not need to be re-ingested. Keep answers structured, "
-        "grounded, adaptive, and appropriately detailed."
+        "persist across sessions and do not need to be re-ingested. "
+        "When the user edits or interacts with notes, the knowledge loop "
+        "automatically updates graph signals and candidate patterns — you do "
+        "not need to manually route these updates. Use suggest_concept_merges "
+        "to find near-duplicate concepts that could be consolidated, and "
+        "render_note_markdown and import_markdown_notes to sync between the "
+        "canonical JSONL store and Markdown mirrors. "
+        "Keep answers structured, grounded, adaptive, and appropriately detailed."
     ),
     tools=[
         _safe_tool(list_papers),
@@ -2025,10 +2479,18 @@ root_agent = Agent(
         _safe_tool(get_personal_note),
         _safe_tool(search_personal_notes),
         _safe_tool(delete_personal_note),
-        _safe_tool(self_improvement_audit),
+        _safe_tool(edit_personal_note),
+        _safe_tool(reject_note_card),
+        _safe_tool(reject_note_concept),
+        _safe_tool(get_note_backlinks),
+        _safe_tool(render_note_markdown),
+        _safe_tool(import_markdown_notes),
+        _safe_tool(knowledge_self_audit),
+        _safe_tool(self_audit_correction),
         _safe_tool(adaptive_grill),
         _safe_tool(respond_to_adaptive_grill),
         _safe_tool(concept_graph.get_concept_graph),
+        _safe_tool(concept_graph.suggest_concept_merges),
         _safe_tool(record_tutor_answer),
         _safe_tool(get_tutor_progress),
     ],

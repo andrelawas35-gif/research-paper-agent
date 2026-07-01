@@ -330,3 +330,199 @@ class TestNextConcept:
         result = _next_concept(progress, ["research agents"], last_was_weak=False)
         # embeddings is mastered (100%), so vector search is the weakest.
         assert result["concept"] == "vector search"
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Self-Audit & Correction — integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestKnowledgeSelfAudit:
+    def test_returns_audit_structure(self, tmp_path: Path):
+        """Audit returns the expected top-level keys even with no data."""
+        from research_paper_agent import agent as agent_module
+
+        # Point file paths at temp dir so we don't mutate real data.
+        agent_module.USER_PROFILE_PATH = tmp_path / "profile.json"
+        agent_module.CANDIDATE_SIGNALS_PATH = tmp_path / "candidate_signals.jsonl"
+        agent_module.INTERACTION_LOG_PATH = tmp_path / "interaction_log.jsonl"
+        agent_module.CONCEPT_GRAPH_PATH = tmp_path / "concept_graph.json"
+        agent_module.TUTOR_PROGRESS_PATH = tmp_path / "tutor_progress.json"
+        agent_module.PERSONAL_NOTES_PATH = tmp_path / "personal_notes.jsonl"
+
+        # Create empty profile so the audit doesn't create the default.
+        agent_module._save_user_profile(
+            {"schema_version": 1, "updated_at": agent_module._now_iso(), "interests": []}
+        )
+
+        result = agent_module.knowledge_self_audit()
+
+        for key in (
+            "audit_generated_at",
+            "confirmed",
+            "candidate_signals",
+            "concept_graph",
+            "tutor_state",
+            "notes",
+            "interaction_summary",
+            "correction_actions_available",
+        ):
+            assert key in result, f"Missing key: {key}"
+
+        # Correction actions should list all 4 supported actions.
+        actions = [a["action"] for a in result["correction_actions_available"]]
+        assert "confirm_signal" in actions
+        assert "reject_signal" in actions
+        assert "downgrade_preference" in actions
+        assert "suppress_concept" in actions
+
+    def test_audit_with_profile_data(self, tmp_path: Path):
+        """Audit surfaces confirmed preferences from the profile."""
+        from research_paper_agent import agent as agent_module
+
+        agent_module.USER_PROFILE_PATH = tmp_path / "profile.json"
+        agent_module.CANDIDATE_SIGNALS_PATH = tmp_path / "candidate_signals.jsonl"
+        agent_module.INTERACTION_LOG_PATH = tmp_path / "interaction_log.jsonl"
+        agent_module.CONCEPT_GRAPH_PATH = tmp_path / "concept_graph.json"
+        agent_module.TUTOR_PROGRESS_PATH = tmp_path / "tutor_progress.json"
+        agent_module.PERSONAL_NOTES_PATH = tmp_path / "personal_notes.jsonl"
+
+        agent_module._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent_module._now_iso(),
+            "interests": [
+                {"name": "knowledge graphs", "confidence": 0.9, "evidence": "Asked repeatedly about graph-based retrieval."}
+            ],
+            "style_preferences": [
+                {"preference": "short answers", "source": "User said 'keep it short'"}
+            ],
+        })
+
+        result = agent_module.knowledge_self_audit()
+        confirmed = result["confirmed"]
+        assert len(confirmed["interests"]) >= 1
+        assert any("knowledge graphs" in str(i) for i in confirmed["interests"])
+
+
+class TestSelfAuditCorrection:
+    def test_rejects_unknown_action(self, tmp_path: Path):
+        """Correction returns an error for unknown actions."""
+        from research_paper_agent import agent as agent_module
+
+        agent_module.USER_PROFILE_PATH = tmp_path / "profile.json"
+        agent_module.CANDIDATE_SIGNALS_PATH = tmp_path / "candidate_signals.jsonl"
+
+        agent_module._save_user_profile(
+            {"schema_version": 1, "updated_at": agent_module._now_iso(), "interests": []}
+        )
+
+        result = agent_module.self_audit_correction("invalid_action", "target", "reason")
+        assert result["status"] == "error"
+        assert "Unknown action" in result["message"]
+
+    def test_confirm_signal_adds_interest(self, tmp_path: Path):
+        """confirm_signal with category 'interest' adds to the profile."""
+        from research_paper_agent import agent as agent_module
+
+        agent_module.USER_PROFILE_PATH = tmp_path / "profile.json"
+        agent_module.CANDIDATE_SIGNALS_PATH = tmp_path / "candidate_signals.jsonl"
+
+        agent_module._save_user_profile(
+            {"schema_version": 1, "updated_at": agent_module._now_iso(), "interests": []}
+        )
+
+        result = agent_module.self_audit_correction(
+            "confirm_signal", "interest:adversarial robustness", "Repeated grill interest"
+        )
+        assert result["status"] == "ok"
+
+        profile = agent_module._load_user_profile()
+        assert any(
+            "adversarial robustness" in i.get("name", "")
+            for i in profile.get("interests", [])
+        )
+
+    def test_confirm_signal_boosts_existing(self, tmp_path: Path):
+        """confirm_signal on an existing interest raises its confidence."""
+        from research_paper_agent import agent as agent_module
+
+        agent_module.USER_PROFILE_PATH = tmp_path / "profile.json"
+        agent_module.CANDIDATE_SIGNALS_PATH = tmp_path / "candidate_signals.jsonl"
+
+        agent_module._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent_module._now_iso(),
+            "interests": [{"name": "bayesian methods", "confidence": 0.5, "evidence": "initial"}],
+        })
+
+        result = agent_module.self_audit_correction(
+            "confirm_signal", "interest:bayesian methods", "Stronger now"
+        )
+        assert result["status"] == "ok"
+
+        profile = agent_module._load_user_profile()
+        interest = next(
+            i for i in profile.get("interests", []) if "bayesian methods" in i.get("name", "")
+        )
+        assert interest["confidence"] >= 0.65  # boosted by 0.2
+
+    def test_downgrade_preference(self, tmp_path: Path):
+        """downgrade_preference lowers confidence on a matching preference."""
+        from research_paper_agent import agent as agent_module
+
+        agent_module.USER_PROFILE_PATH = tmp_path / "profile.json"
+        agent_module.CANDIDATE_SIGNALS_PATH = tmp_path / "candidate_signals.jsonl"
+
+        agent_module._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent_module._now_iso(),
+            "interests": [{"name": "outdated topic", "confidence": 0.9, "evidence": "old"}],
+        })
+
+        result = agent_module.self_audit_correction(
+            "downgrade_preference", "outdated topic", "No longer relevant"
+        )
+        assert result["status"] == "ok"
+
+        profile = agent_module._load_user_profile()
+        interest = next(
+            i for i in profile.get("interests", []) if "outdated topic" in i.get("name", "")
+        )
+        assert interest["confidence"] <= 0.65  # lowered by 0.3
+
+    def test_reject_signal_logs_rejection(self, tmp_path: Path):
+        """reject_signal writes a rejection entry to candidate signals."""
+        from research_paper_agent import agent as agent_module
+
+        agent_module.USER_PROFILE_PATH = tmp_path / "profile.json"
+        agent_module.CANDIDATE_SIGNALS_PATH = tmp_path / "candidate_signals.jsonl"
+
+        agent_module._save_user_profile(
+            {"schema_version": 1, "updated_at": agent_module._now_iso(), "interests": []}
+        )
+
+        result = agent_module.self_audit_correction(
+            "reject_signal", "verbose_explanations", "Prefers short answers"
+        )
+        assert result["status"] == "ok"
+        assert agent_module.CANDIDATE_SIGNALS_PATH.exists()
+
+    def test_suppress_concept(self, tmp_path: Path):
+        """suppress_concept calls concept_graph.reject_concept."""
+        from research_paper_agent import agent as agent_module
+
+        agent_module.USER_PROFILE_PATH = tmp_path / "profile.json"
+        agent_module.CONCEPT_GRAPH_PATH = tmp_path / "concept_graph.json"
+
+        agent_module._save_user_profile(
+            {"schema_version": 1, "updated_at": agent_module._now_iso(), "interests": []}
+        )
+
+        # Write a minimal concept graph with the concept to suppress.
+        graph = {"schema_version": 2, "edges": {}, "dependencies": {}}
+        agent_module.CONCEPT_GRAPH_PATH.write_text(json.dumps(graph))
+
+        result = agent_module.self_audit_correction(
+            "suppress_concept", "debunked_theory", "Paper retracted"
+        )
+        assert result["status"] == "ok"

@@ -17,7 +17,7 @@ _APP_DIR = Path(__file__).resolve().parent
 _USER_MODEL_DIR = _APP_DIR / "user_model"
 CONCEPT_GRAPH_PATH = _USER_MODEL_DIR / "concept_graph.json"
 
-_EDGE_TYPES = frozenset({"ingest", "engaged", "saved", "rejected"})
+_EDGE_TYPES = frozenset({"ingest", "engaged", "saved", "rejected", "note"})
 
 # In-memory cache — invalidated on every _save().
 _graph_cache: dict[str, Any] | None = None
@@ -26,11 +26,11 @@ _graph_cache: dict[str, Any] | None = None
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-_TYPE_BONUS = {"ingest": 0.5, "engaged": 1.0, "saved": 2.0, "rejected": -1.0}
+_TYPE_BONUS = {"ingest": 0.5, "engaged": 1.0, "saved": 2.0, "rejected": -1.0, "note": 0.8}
 
 # Type promotion rank — higher beats lower.  Rejected is below everything;
-# only an explicit saved can override a rejection.
-_TYPE_RANK = {"rejected": -1, "ingest": 0, "engaged": 1, "saved": 2}
+# note edges sit between ingest (passive) and engaged (active).
+_TYPE_RANK = {"rejected": -1, "ingest": 0, "note": 1, "engaged": 2, "saved": 3}
 
 
 def _now_iso() -> str:
@@ -186,12 +186,12 @@ def link(
             "type": edge_type,
             "weight": round(similarity_score, 4),
             "source_papers": [source_paper],
+            "sources": [{"source_type": "paper", "source_id": source_paper}],
             "created_at": now,
-            "last_engaged_at": now if edge_type in {"engaged", "saved"} else None,
+            "last_engaged_at": now if edge_type in {"engaged", "saved", "note"} else None,
         }
     else:
-        # Promote edge type: saved > engaged > ingest > rejected.
-        # A rejected edge can only be overridden by an explicit saved.
+        # Promote edge type: saved > engaged > note > ingest > rejected.
         current_rank = _TYPE_RANK.get(edge.get("type", "ingest"), 0)
         new_rank = _TYPE_RANK.get(edge_type, 0)
         if edge.get("type") == "rejected" and edge_type != "saved":
@@ -202,7 +202,12 @@ def link(
         edge["weight"] = round(edge.get("weight", similarity_score) + similarity_score, 4)
         if source_paper not in edge.setdefault("source_papers", []):
             edge["source_papers"].append(source_paper)
-        if edge_type in {"engaged", "saved"}:
+        # ADR 0038: append typed source reference.
+        source_entry = {"source_type": "paper", "source_id": source_paper}
+        existing_sources = edge.setdefault("sources", [])
+        if source_entry not in existing_sources:
+            existing_sources.append(source_entry)
+        if edge_type in {"engaged", "saved", "note"}:
             edge["last_engaged_at"] = now
 
     graph["edges"][interest_key][concept_key] = edge
@@ -215,6 +220,8 @@ def decay() -> dict[str, Any]:
 
     - Ingest edges with weight < 0.5 and no activity for 60 days → removed.
     - Ingest edges with no promotion for 90 days → removed.
+    - Note edges: stable for 90 days, lose half weight after 180 days inactivity,
+      removed after 365 days (ADR 0040).
     - Engaged edges lose half weight after 30 days, removed after 60 days.
     - Saved edges never decay.
     - Rejected edges never decay.
@@ -247,14 +254,21 @@ def decay() -> dict[str, Any]:
 
             if edge_type == "ingest":
                 weight = edge.get("weight", 1.0)
-                # Weak ingest edges: 60 days of silence → remove.
                 if weight < 0.5 and days >= 60:
                     del concept_edges[concept_key]
                     removed += 1
-                # Any ingest edge: 90 days without promotion → remove.
                 elif days >= 90:
                     del concept_edges[concept_key]
                     removed += 1
+            elif edge_type == "note":
+                # ADR 0040: note signals decay slowly.
+                if days >= 365:
+                    del concept_edges[concept_key]
+                    removed += 1
+                elif days >= 180:
+                    edge["weight"] = round(max(0.1, edge.get("weight", 1.0) * 0.5), 4)
+                    decayed += 1
+                # 0–90 days: stable, no decay.
             elif edge_type == "engaged":
                 if days >= 60:
                     del concept_edges[concept_key]
@@ -270,6 +284,28 @@ def decay() -> dict[str, Any]:
         _save(graph)
 
     return {"decayed_edges": decayed, "removed_edges": removed}
+
+
+def refresh_note_signal(note_id: str) -> dict[str, Any]:
+    """Refresh the ``last_engaged_at`` timestamp on all note-type edges
+    linked to *note_id* so they don't decay prematurely (ADR 0040).
+
+    Call this from note edit, search, link, grill, or tutor operations.
+    """
+    graph = load()
+    now = _now_iso()
+    refreshed = 0
+    for interest_key in graph.get("edges", {}):
+        for concept_key, edge in graph["edges"][interest_key].items():
+            if edge.get("type") != "note":
+                continue
+            sources = edge.get("source_papers", [])
+            if note_id in sources:
+                edge["last_engaged_at"] = now
+                refreshed += 1
+    if refreshed:
+        _save(graph)
+    return {"refreshed_edges": refreshed, "note_id": note_id}
 
 
 def rank(
@@ -532,6 +568,75 @@ def _rebuild_paper_links(graph: dict[str, Any]) -> None:
     graph["paper_links"] = links
 
 
+def suggest_concept_merges(threshold: float = 0.75) -> dict[str, Any]:
+    """Suggest near-duplicate concepts for user approval (ADR 0022).
+
+    Unlike ``merge_similar_concepts``, this is **non-destructive** — it
+    returns merge candidates but does not modify the graph.  The user must
+    approve each merge explicitly before calling ``merge_similar_concepts``.
+
+    Parameters
+    ----------
+    threshold:
+        Similarity threshold for suggesting a merge (default 0.75, lower
+        than the destructive merge threshold to catch more candidates).
+
+    Returns
+    -------
+    A dict with ``suggestions`` — a list of {concept_a, concept_b, similarity,
+    shared_papers, recommendation}.
+    """
+    graph = load()
+    edges = graph.get("edges", {})
+    suggestions: list[dict[str, Any]] = []
+
+    all_concepts: set[str] = set()
+    for concept_edges in edges.values():
+        all_concepts.update(concept_edges.keys())
+
+    concept_list = sorted(all_concepts)
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for i, ca in enumerate(concept_list):
+        for cb in concept_list[i + 1:]:
+            pair = (ca, cb)
+            if pair in seen_pairs:
+                continue
+            sim = _similarity(ca, cb)
+            if sim < threshold:
+                continue
+            seen_pairs.add(pair)
+
+            # Collect shared source papers and interests.
+            shared_papers: set[str] = set()
+            shared_interests: set[str] = set()
+            for interest_key, concept_edges in edges.items():
+                if ca in concept_edges and cb in concept_edges:
+                    shared_interests.add(interest_key)
+                    shared_papers.update(concept_edges[ca].get("source_papers", []))
+                    shared_papers.update(concept_edges[cb].get("source_papers", []))
+
+            confidence = "high" if sim >= 0.85 else "medium" if sim >= 0.75 else "low"
+            suggestions.append({
+                "concept_a": ca,
+                "concept_b": cb,
+                "similarity": round(sim, 4),
+                "shared_papers": sorted(shared_papers)[:5],
+                "shared_interests": sorted(shared_interests)[:5],
+                "recommendation": (
+                    f"Strong match ({confidence} confidence). "
+                    f"Reply 'merge {ca} and {cb}' to confirm, or ignore to keep separate."
+                ),
+            })
+
+    suggestions.sort(key=lambda s: s["similarity"], reverse=True)
+    return {
+        "status": "ok",
+        "suggestion_count": len(suggestions),
+        "suggestions": suggestions[:10],
+    }
+
+
 def merge_similar_concepts(threshold: float = 0.85) -> dict[str, Any]:
     """Merge near-duplicate concept keys across the graph.
 
@@ -688,4 +793,53 @@ def remove_source_paper(source_name: str) -> dict[str, Any]:
         "source_name": source_name,
         "edge_removals": edge_removals,
         "dependency_removals": dep_removals,
+    }
+
+
+def reject_concept(concept: str, reason: str = "") -> dict[str, Any]:
+    """Mark a concept as rejected so it is suppressed in graph ranking.
+
+    Sets the edge type to ``"rejected"`` for all interest→concept edges
+    matching *concept*.  Rejected edges carry a negative weight bonus and
+    are never decayed — the rejection is durable until explicitly reversed
+    (e.g. by a subsequent ``link(…, edge_type="saved")`` call).
+
+    Parameters
+    ----------
+    concept:
+        The concept name to suppress (case-insensitive, token-matched).
+    reason:
+        Human-readable reason for the rejection (stored on the edge).
+
+    Returns
+    -------
+    A dict with ``rejected_edges`` count and the concept key.
+    """
+    graph = load()
+    concept_key = concept.strip().lower()
+    now = _now_iso()
+    rejected = 0
+
+    for interest_key in graph.get("edges", {}):
+        for edge_key in list(graph["edges"][interest_key]):
+            # Token-match: accept partial overlap so "outdated_method"
+            # matches edges whose concept key contains "outdated" or "method".
+            if concept_key in edge_key or any(
+                token in edge_key for token in concept_key.split()
+            ):
+                edge = graph["edges"][interest_key][edge_key]
+                edge["type"] = "rejected"
+                edge["weight"] = round(edge.get("weight", 1.0) * 0.1, 4)
+                edge["rejected_at"] = now
+                edge["rejection_reason"] = reason[:500]
+                rejected += 1
+
+    if rejected:
+        _save(graph)
+
+    return {
+        "status": "ok",
+        "concept_key": concept_key,
+        "rejected_edges": rejected,
+        "reason": reason[:500],
     }

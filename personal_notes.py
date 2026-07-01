@@ -304,6 +304,65 @@ def _concepts_for_sentence(sentence: str, concepts: list[str], limit: int = 4) -
 
 
 def _extract_cards(text: str, concepts: list[str], limit: int = 5) -> list[dict[str, Any]]:
+    """Extract 1–5 high-confidence reusable Note Cards from note text.
+
+    Uses the DeepSeek API for extraction (ADR 0033) with a fallback to
+    keyword-based extraction when the API is unavailable or returns no cards.
+    """
+    if not text.strip():
+        return []
+
+    # ── LLM-mediated extraction (primary) ──────────────────────────
+    try:
+        import os
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        )
+        prompt = (
+            "Extract 1–5 reusable note cards from this text. Each card should be "
+            "a self-contained insight, rule, question, or decision the user can "
+            "revisit later. Return ONLY valid JSON with this format:\n\n"
+            '{"cards": [{"text": "...", "confidence": 0.0-1.0}]}\n\n'
+            f"Concepts mentioned in the note: {', '.join(concepts[:8])}\n\n"
+            f"Text:\n{text[:1500]}"
+        )
+        response = client.chat.completions.create(
+            model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+            temperature=0.2,
+        )
+        raw = response.choices[0].message.content or "{}"
+        # Extract JSON from the response.
+        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if json_match:
+            data = json.loads(json_match.group(0))
+            llm_cards = data.get("cards", [])
+            if llm_cards:
+                cards = []
+                for idx, c in enumerate(llm_cards[:limit]):
+                    card_text = str(c.get("text", "")).strip()
+                    if not card_text or len(card_text) < 15:
+                        continue
+                    confidence = float(c.get("confidence", 0.7))
+                    if confidence < 0.4:
+                        continue
+                    cards.append({
+                        "card_id": f"card_{idx + 1:03d}",
+                        "text": card_text[:400],
+                        "concepts": _concepts_for_sentence(card_text, concepts),
+                        "rejected": False,
+                        "confidence": round(confidence, 2),
+                    })
+                if cards:
+                    return cards
+    except Exception:
+        pass  # Fall through to keyword-based extraction.
+
+    # ── Keyword-based extraction (fallback) ─────────────────────────
     cards = []
     seen: set[str] = set()
     candidates = []
@@ -498,3 +557,284 @@ def soft_delete_note(note_id: str, path: Path | None = None) -> dict[str, Any]:
         _write_notes(notes, path)
         return {"status": "ok", "changed": True, **mirror, "note": note}
     return {"status": "error", "message": f"Note not found: {note_id}"}
+
+
+# ---------------------------------------------------------------------------
+# ADR 0028 + 0035: Note editing, versioning, and corrections
+# ---------------------------------------------------------------------------
+
+
+def edit_personal_note(
+    note_id: str,
+    text: str = "",
+    title: str = "",
+    user_tags: str | list[str] | None = None,
+    concepts: str | list[str] | None = None,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Edit a personal note, preserving the previous state as a version entry.
+
+    Only provided fields are updated; omitted fields keep their current
+    values.  Each edit appends a ``versions`` entry with the previous
+    title, text, tags, and concepts so backlinks and cards remain traceable.
+    """
+    notes = load_notes(path, include_deleted=True)
+    now = _now_iso()
+
+    for note in notes:
+        if note.get("note_id") != note_id:
+            continue
+
+        # Snapshot current state before mutation.
+        version_entry = {
+            "versioned_at": now,
+            "previous_title": note.get("title"),
+            "previous_text": note.get("text"),
+            "previous_user_tags": list(note.get("user_tags", [])),
+            "previous_concepts": list(note.get("concepts", [])),
+        }
+        note.setdefault("versions", []).append(version_entry)
+
+        # Apply updates.
+        if text.strip():
+            note["text"] = text.strip()
+        if title.strip():
+            note["title"] = title.strip()
+        if user_tags is not None:
+            note["user_tags"] = _split_csv(user_tags)
+        if concepts is not None:
+            parsed = _split_csv(concepts)
+            note["concepts"] = _extract_concepts(note.get("text", ""), parsed)
+
+        note["updated_at"] = now
+        note["suggested_tags"] = _suggest_tags(
+            note.get("text", ""), note.get("user_tags", [])
+        )
+        # Re-extract cards from updated text.
+        note["cards"] = _extract_cards(
+            note.get("text", ""), note.get("concepts", [])
+        )
+
+        mirror = _write_markdown_mirror(note, path)
+        _write_notes(notes, path)
+        return {
+            "status": "ok",
+            "note_id": note_id,
+            "version_count": len(note["versions"]),
+            **mirror,
+            "note": note,
+        }
+
+    return {"status": "error", "message": f"Note not found: {note_id}"}
+
+
+def reject_note_card(
+    note_id: str,
+    card_index: int,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Reject an extracted Note Card by index (0-based).
+
+    The card is marked ``rejected: true`` and excluded from future
+    search indexing and Markdown mirror rendering.  The underlying
+    note text is unchanged.
+    """
+    notes = load_notes(path, include_deleted=True)
+    for note in notes:
+        if note.get("note_id") != note_id:
+            continue
+        cards = note.get("cards", [])
+        if card_index < 0 or card_index >= len(cards):
+            return {
+                "status": "error",
+                "message": f"Card index {card_index} out of range (0–{len(cards) - 1})",
+            }
+        cards[card_index]["rejected"] = True
+        note["updated_at"] = _now_iso()
+        _write_markdown_mirror(note, path)
+        _write_notes(notes, path)
+        return {
+            "status": "ok",
+            "note_id": note_id,
+            "rejected_card_index": card_index,
+            "card_text": cards[card_index].get("text", "")[:200],
+        }
+    return {"status": "error", "message": f"Note not found: {note_id}"}
+
+
+def reject_note_concept(
+    note_id: str,
+    concept_name: str,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Reject a linked Concept from a personal note.
+
+    The concept is removed from the note's ``concepts`` list and from
+    any cards that reference it.  The concept-graph edge is *not*
+    modified — use ``concept_graph.reject_concept`` separately to
+    suppress graph-level ranking.
+    """
+    notes = load_notes(path, include_deleted=True)
+    for note in notes:
+        if note.get("note_id") != note_id:
+            continue
+        concept_key = concept_name.strip().lower()
+        before = len(note.get("concepts", []))
+        note["concepts"] = [
+            c for c in note.get("concepts", [])
+            if c.lower() != concept_key
+        ]
+        # Also scrub the concept from any cards.
+        for card in note.get("cards", []):
+            card["concepts"] = [
+                c for c in card.get("concepts", [])
+                if c.lower() != concept_key
+            ]
+        removed = before - len(note["concepts"])
+        note["updated_at"] = _now_iso()
+        _write_markdown_mirror(note, path)
+        _write_notes(notes, path)
+        return {
+            "status": "ok",
+            "note_id": note_id,
+            "removed_concept": concept_name,
+            "concepts_removed": removed,
+        }
+    return {"status": "error", "message": f"Note not found: {note_id}"}
+
+
+# ---------------------------------------------------------------------------
+# ADR 0031 + 0032: Markdown mirror public API + import
+# ---------------------------------------------------------------------------
+
+
+def render_note_markdown(note_id: str, path: Path | None = None) -> dict[str, Any]:
+    """Return the full Markdown mirror for a note as a string.
+
+    Regenerates the mirror from the canonical JSONL record, ensuring
+    it reflects the latest edits, card rejections, and concept changes.
+    """
+    result = get_note(note_id, path=path, include_deleted=True)
+    if result.get("status") != "ok":
+        return result
+    note = result["note"]
+    markdown_text = _format_markdown_mirror(note)
+    return {
+        "status": "ok",
+        "note_id": note_id,
+        "markdown": markdown_text,
+        "title": note.get("title"),
+    }
+
+
+def import_markdown_notes(path: Path | None = None) -> dict[str, Any]:
+    """Sync Markdown mirrors back into the canonical JSONL store.
+
+    Reads every ``.md`` file in the ``notes/`` directory, extracts
+    frontmatter fields, and updates the corresponding JSONL record.
+    This is an explicit, user-invoked action — it never runs
+    automatically during unrelated operations (ADR 0032).
+    """
+    markdown_dir = _markdown_notes_dir(path)
+    if not markdown_dir.exists():
+        return {"status": "ok", "imported": 0, "message": "No notes/ directory found."}
+
+    notes = load_notes(path, include_deleted=True)
+    note_index: dict[str, int] = {}
+    for idx, note in enumerate(notes):
+        note_index[note.get("note_id", "")] = idx
+
+    imported = 0
+    for md_file in sorted(markdown_dir.glob("*.md")):
+        raw = md_file.read_text(encoding="utf-8", errors="ignore")
+        # Extract YAML frontmatter between --- markers.
+        fm_match = re.match(r"^---\s*\n(.*?)\n---", raw, re.DOTALL)
+        if not fm_match:
+            continue
+        note_id = ""
+        title = ""
+        for line in fm_match.group(1).splitlines():
+            line = line.strip()
+            if line.startswith("note_id:"):
+                note_id = line.split(":", 1)[1].strip().strip("\"'")
+            elif line.startswith("title:"):
+                title = line.split(":", 1)[1].strip().strip("\"'")
+
+        if not note_id or note_id not in note_index:
+            continue
+
+        idx = note_index[note_id]
+        note = notes[idx]
+
+        # Extract body text after frontmatter and strip section headers.
+        body = raw[fm_match.end():]
+        # Remove markdown headers and metadata sections — keep only prose.
+        body_clean = re.sub(r"^#.*$", "", body, flags=re.MULTILINE)
+        body_clean = re.sub(r"^##.*$", "", body_clean, flags=re.MULTILINE)
+        body_clean = body_clean.strip()
+
+        if body_clean and body_clean != note.get("text", "").strip():
+            # Version the current state before importing.
+            version_entry = {
+                "versioned_at": _now_iso(),
+                "previous_title": note.get("title"),
+                "previous_text": note.get("text"),
+                "previous_user_tags": list(note.get("user_tags", [])),
+                "previous_concepts": list(note.get("concepts", [])),
+                "source": f"markdown_import:{md_file.name}",
+            }
+            note.setdefault("versions", []).append(version_entry)
+            note["text"] = body_clean
+            if title.strip():
+                note["title"] = title.strip()
+            note["updated_at"] = _now_iso()
+            note["suggested_tags"] = _suggest_tags(body_clean, note.get("user_tags", []))
+            imported += 1
+
+    if imported:
+        _write_notes(notes, path)
+
+    return {"status": "ok", "imported": imported, "notes_path": str(_note_store_path(path))}
+
+
+# ---------------------------------------------------------------------------
+# ADR 0027: Concept-derived backlinks
+# ---------------------------------------------------------------------------
+
+
+def get_backlinks(note_id: str, path: Path | None = None) -> dict[str, Any]:
+    """Return notes, concepts, and interests that share concepts with this note.
+
+    Backlinks are derived from the Concept Graph — two notes are linked
+    when they share at least one Concept.  This is an agent-native graph
+    view, not a manual wiki-link system (ADR 0027).
+    """
+    result = get_note(note_id, path=path)
+    if result.get("status") != "ok":
+        return result
+    source_concepts = {c.lower() for c in result["note"].get("concepts", [])}
+    if not source_concepts:
+        return {"status": "ok", "note_id": note_id, "backlinks": [], "concepts": []}
+
+    all_notes = load_notes(path)
+    backlinks: list[dict[str, Any]] = []
+    for note in all_notes:
+        if note.get("note_id") == note_id:
+            continue
+        target_concepts = {c.lower() for c in note.get("concepts", [])}
+        shared = source_concepts & target_concepts
+        if shared:
+            backlinks.append({
+                "note_id": note.get("note_id"),
+                "title": note.get("title"),
+                "shared_concepts": sorted(shared),
+                "overlap_count": len(shared),
+            })
+
+    backlinks.sort(key=lambda b: b["overlap_count"], reverse=True)
+    return {
+        "status": "ok",
+        "note_id": note_id,
+        "concepts": sorted(source_concepts),
+        "backlinks": backlinks[:20],
+    }
