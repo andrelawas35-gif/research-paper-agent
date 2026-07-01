@@ -27,9 +27,12 @@ def test_save_note_creates_schema_record(tmp_path: Path):
     assert note["text"].startswith("Graph memory")
     assert note["deleted_at"] is None
     assert note["user_tags"] == ["agent", "knowledge management"]
-    assert note["suggested_tags"] == []
-    assert note["cards"] == []
-    assert note["concepts"] == ["concept graph", "personal notes"]
+    assert "graph" in note["suggested_tags"]
+    assert len(note["cards"]) == 1
+    assert note["cards"][0]["card_id"] == "card_001"
+    assert note["cards"][0]["text"] == "Graph memory should separate user notes from paper evidence."
+    assert note["cards"][0]["rejected"] is False
+    assert note["concepts"][:2] == ["concept graph", "personal notes"]
     assert note["candidate_signals"] == []
     assert note["markdown_path"] is None
     assert note["versions"] == []
@@ -79,6 +82,36 @@ def test_list_get_and_search_notes(tmp_path: Path):
     assert by_text["matches"][0]["note_id"] == saved["note_id"]
     assert by_tag["matches"][0]["note_id"] == saved["note_id"]
     assert by_concept["matches"][0]["note_id"] == saved["note_id"]
+
+
+def test_save_note_extracts_conservative_cards_concepts_and_tags(tmp_path: Path):
+    from research_paper_agent import personal_notes
+
+    path = tmp_path / "personal_notes.jsonl"
+
+    saved = personal_notes.save_note(
+        (
+            "Knowledge management should keep paper evidence separate from personal notes. "
+            "The self-learning loop needs candidate signals before confirmed adaptation rules. "
+            "Tiny aside."
+        ),
+        user_tags="agent",
+        path=path,
+    )
+
+    note = saved["note"]
+
+    assert 1 <= len(note["cards"]) <= 5
+    assert note["cards"][0] == {
+        "card_id": "card_001",
+        "text": "Knowledge management should keep paper evidence separate from personal notes.",
+        "concepts": note["cards"][0]["concepts"],
+        "rejected": False,
+    }
+    assert all(card["concepts"] for card in note["cards"])
+    assert "knowledge" in note["suggested_tags"]
+    assert "agent" not in note["suggested_tags"]
+    assert any("knowledge" in concept for concept in note["concepts"])
 
 
 def test_soft_deleted_notes_are_hidden_from_list_and_search(tmp_path: Path):

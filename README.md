@@ -109,6 +109,12 @@ The profile is inspectable at `user_model/profile.json`. Interaction logs are wr
 
 The agent saves personal notes only when you explicitly ask, using prompts like `note:`, `save note:`, or `remember note:`. Notes are local JSONL records in `user_model/personal_notes.jsonl` and are treated as your knowledge/context, not as cited paper evidence.
 
+On save, the agent performs conservative local extraction:
+
+- up to 5 reusable note cards from high-signal sentences
+- suggested tags from repeated or early meaningful terms
+- concepts from explicit concepts plus conservative phrase candidates
+
 Deleted notes are soft-deleted: normal list/search hides them, but the record stays on disk for recovery and future audit tools.
 
 ## Adaptive Grill
