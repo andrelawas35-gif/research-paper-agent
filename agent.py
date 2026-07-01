@@ -689,14 +689,241 @@ def _is_explicit_memory_request(text: str) -> bool:
 
 
 def list_papers() -> dict[str, Any]:
-    """List supported papers available for ingestion."""
+    """List supported papers available for ingestion, scanning subdirectories recursively."""
     _ensure_dirs()
     files = sorted(
-        path.name
-        for path in PAPERS_DIR.iterdir()
-        if path.suffix.lower() in {".txt", ".md", ".pdf"}
+        str(path.relative_to(PAPERS_DIR))
+        for path in PAPERS_DIR.rglob("*")
+        if path.suffix.lower() in {".txt", ".md", ".pdf"} and path.is_file()
     )
-    return {"papers_dir": str(PAPERS_DIR), "papers": files}
+    subdirs = sorted(
+        str(d.relative_to(PAPERS_DIR)).replace("\\", "/")
+        for d in PAPERS_DIR.iterdir()
+        if d.is_dir()
+    )
+    return {"papers_dir": str(PAPERS_DIR), "subdirectories": subdirs, "papers": files}
+
+
+def rename_paper(old_name: str, new_name: str) -> dict[str, Any]:
+    """Rename a paper file and update all dependent records atomically.
+
+    Migrates:
+    1. The file in ``papers/``
+    2. The corresponding ``knowledge_base/*.json`` record (renames file + patches ``source``)
+    3. Concept-graph edges referencing the old filename
+
+    Rolls back on failure at any step.
+    """
+    _ensure_dirs()
+    old_path = (PAPERS_DIR / old_name).resolve()
+
+    # Security: prevent path traversal outside papers/
+    if PAPERS_DIR.resolve() not in old_path.parents or not old_path.is_file():
+        return {"status": "error", "message": f"Source file not found in papers/: {old_name}"}
+
+    new_path = (PAPERS_DIR / new_name).resolve()
+    if PAPERS_DIR.resolve() not in new_path.parents:
+        return {"status": "error", "message": f"Target path must stay within papers/: {new_name}"}
+
+    if not new_path.parent.exists():
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if new_path.exists():
+        return {"status": "error", "message": f"Target file already exists: {new_name}"}
+
+    # --- Step 1: Rename the file ---
+    try:
+        old_path.rename(new_path)
+    except OSError as exc:
+        return {"status": "error", "message": f"File rename failed: {exc}"}
+
+    # --- Step 2: Rename and patch the KB record ---
+    old_kb_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(old_name).stem)
+    new_kb_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(new_name).stem)
+    old_kb_path = KNOWLEDGE_DIR / f"{old_kb_name}.json"
+    new_kb_path = KNOWLEDGE_DIR / f"{new_kb_name}.json"
+
+    kb_renamed = False
+    if old_kb_path.exists():
+        try:
+            record = json.loads(old_kb_path.read_text(encoding="utf-8"))
+            record["source"] = new_name
+            if "metadata" in record:
+                record["metadata"]["source"] = new_name
+            new_kb_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+            old_kb_path.unlink()
+            kb_renamed = True
+        except Exception as exc:
+            # Roll back file rename
+            try:
+                new_path.rename(old_path)
+            except OSError:
+                pass
+            return {
+                "status": "error",
+                "message": f"KB record migration failed (file rename rolled back): {exc}",
+            }
+
+    # --- Step 3: Migrate concept-graph edges ---
+    graph_result = {"edge_updates": 0, "dependency_updates": 0}
+    try:
+        graph_result = concept_graph.rename_source_paper(old_name, new_name)
+    except Exception as exc:
+        # Roll back KB rename + file rename
+        if kb_renamed:
+            try:
+                new_kb_path.rename(old_kb_path)
+            except OSError:
+                pass
+        try:
+            new_path.rename(old_path)
+        except OSError:
+            pass
+        return {
+            "status": "error",
+            "message": f"Concept-graph migration failed (file and KB rolled back): {exc}",
+        }
+
+    # Invalidate caches
+    _load_records._cache = None  # type: ignore[attr-defined]
+
+    return {
+        "status": "ok",
+        "old_name": old_name,
+        "new_name": new_name,
+        "kb_record_migrated": kb_renamed,
+        "concept_graph_edges_updated": graph_result["edge_updates"],
+        "concept_graph_dependencies_updated": graph_result["dependency_updates"],
+    }
+
+
+def delete_paper(file_name: str, dry_run: bool = True) -> dict[str, Any]:
+    """Delete a paper file and its knowledge-base record.
+
+    Args:
+        file_name: Path relative to ``papers/``.
+        dry_run: When True (default), preview what would be deleted without
+                 making changes.  Set to False to actually delete.
+
+    Returns a preview when dry_run=True; performs the deletion otherwise.
+    """
+    _ensure_dirs()
+    path = (PAPERS_DIR / file_name).resolve()
+
+    if PAPERS_DIR.resolve() not in path.parents:
+        return {"status": "error", "message": f"Path outside papers/: {file_name}"}
+
+    if not path.is_file():
+        return {"status": "error", "message": f"File not found: {file_name}"}
+
+    kb_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(file_name).stem)
+    kb_path = KNOWLEDGE_DIR / f"{kb_name}.json"
+    kb_exists = kb_path.exists()
+
+    file_size = path.stat().st_size
+    file_size_str = f"{file_size} bytes" if file_size else "0 bytes (empty)"
+
+    preview = {
+        "dry_run": dry_run,
+        "file": file_name,
+        "file_size": file_size_str,
+        "kb_record_exists": kb_exists,
+        "kb_record_path": str(kb_path) if kb_exists else None,
+    }
+
+    if dry_run:
+        return {
+            "status": "preview",
+            "message": (
+                f"Would delete: {file_name} ({file_size_str})"
+                + (f" + knowledge_base/{kb_path.name}" if kb_exists else "")
+                + ". Set dry_run=False to execute."
+            ),
+            "preview": preview,
+        }
+
+    # --- Perform deletion ---
+    errors = []
+
+    try:
+        path.unlink()
+    except OSError as exc:
+        errors.append(f"file delete: {exc}")
+
+    if kb_exists:
+        try:
+            kb_path.unlink()
+        except OSError as exc:
+            errors.append(f"KB record delete: {exc}")
+
+    # Clean up concept-graph references
+    graph_result = {"edge_removals": 0, "dependency_removals": 0}
+    try:
+        graph_result = concept_graph.remove_source_paper(file_name)
+    except Exception as exc:
+        errors.append(f"concept graph cleanup: {exc}")
+
+    # Invalidate caches
+    _load_records._cache = None  # type: ignore[attr-defined]
+
+    if errors:
+        return {
+            "status": "partial",
+            "message": f"Deleted with {len(errors)} issue(s): {'; '.join(errors)}",
+            "file_deleted": not path.exists(),
+            "kb_record_deleted": not kb_path.exists(),
+            "graph_edge_removals": graph_result["edge_removals"],
+            "errors": errors,
+        }
+
+    return {
+        "status": "ok",
+        "message": f"Deleted {file_name} and its knowledge-base record.",
+        "file_deleted": True,
+        "kb_record_deleted": kb_exists,
+        "graph_edge_removals": graph_result["edge_removals"],
+        "graph_dependency_removals": graph_result["dependency_removals"],
+    }
+
+
+def organize_papers(mapping: dict[str, str]) -> dict[str, Any]:
+    """Rename and/or move multiple papers according to a mapping.
+
+    Args:
+        mapping: Dict of ``{current_filename: new_filename}``.  New filenames
+                 may include subdirectory paths (e.g. ``abm/Angere_2010.pdf``).
+                 Subdirectories are created automatically.
+
+    Each rename is performed via ``rename_paper``, so KB records and concept-graph
+    edges are migrated atomically per file.  If any rename fails, previously
+    completed renames are NOT rolled back (each is independently atomic).
+    """
+    if not mapping:
+        return {"status": "error", "message": "mapping must be a non-empty dict of {old: new}"}
+
+    results = []
+    succeeded = 0
+    failed = 0
+
+    for old_name, new_name in mapping.items():
+        try:
+            result = rename_paper(old_name, new_name)
+            results.append(result)
+            if result.get("status") == "ok":
+                succeeded += 1
+            else:
+                failed += 1
+        except Exception as exc:
+            results.append({"status": "error", "old_name": old_name, "new_name": new_name, "message": str(exc)})
+            failed += 1
+
+    return {
+        "status": "ok" if failed == 0 else "partial",
+        "total": len(mapping),
+        "succeeded": succeeded,
+        "failed": failed,
+        "results": results,
+    }
 
 
 def _infer_dependencies(concepts: list[dict[str, Any]], source_paper: str) -> int:
@@ -804,8 +1031,14 @@ def ingest_paper(file_name: str) -> dict[str, Any]:
                 continue
             for concept in notes["concepts"]:
                 concept_name = concept.get("name", "")
-                if concept_name and concept_graph.token_overlap(interest_name, concept_name):
-                    concept_graph.link(interest_name, concept_name, path.name, edge_type="ingest")
+                if not concept_name:
+                    continue
+                sim = concept_graph._similarity(interest_name, concept_name)
+                if sim > 0:
+                    concept_graph.link(
+                        interest_name, concept_name, path.name,
+                        edge_type="ingest", similarity_score=sim,
+                    )
     except Exception:
         pass  # graph linking is best-effort; never block ingest
 
@@ -1541,8 +1774,14 @@ def record_tutor_answer(
         profile = _load_user_profile()
         for interest in profile.get("interests", []):
             interest_name = interest.get("name", "")
-            if interest_name and concept_graph.token_overlap(interest_name, concept):
-                concept_graph.link(interest_name, concept, source or "tutor_session", edge_type="engaged")
+            if not interest_name:
+                continue
+            sim = concept_graph._similarity(interest_name, concept)
+            if sim > 0:
+                concept_graph.link(
+                    interest_name, concept, source or "tutor_session",
+                    edge_type="engaged", similarity_score=sim,
+                )
     except Exception:
         pass
 
@@ -1642,7 +1881,13 @@ root_agent = Agent(
         "assistant for this user. Use tools before making claims about ingested papers. "
         "For factual answers, call search_evidence and cite the returned citation "
         "fields. Use paper_brief for summaries, compare_papers for cross-paper "
-        "synthesis, and make_study_guide for learning workflows. Separate source-backed "
+        "synthesis, and make_study_guide for learning workflows. "
+        "Use rename_paper, delete_paper, and organize_papers to manage the papers/ "
+        "directory. rename_paper atomically migrates file, knowledge-base record, "
+        "and concept-graph edges. delete_paper defaults to dry-run preview; only "
+        "execute when the user confirms. organize_papers accepts a mapping of "
+        "{old_name: new_name} and runs each rename independently. "
+        "Separate source-backed "
         "claims from your own inference. Before giving a personalized recommendation "
         "from a paper, establish at least one cited source-backed claim first; label "
         "brainstorming or extrapolation as inference. Exercise research taste: when "
@@ -1709,6 +1954,9 @@ root_agent = Agent(
     ),
     tools=[
         _safe_tool(list_papers),
+        _safe_tool(rename_paper),
+        _safe_tool(delete_paper),
+        _safe_tool(organize_papers),
         _safe_tool(ingest_paper),
         _safe_tool(ingest_all_papers),
         _safe_tool(list_concepts),

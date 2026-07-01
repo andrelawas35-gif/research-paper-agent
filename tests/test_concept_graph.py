@@ -43,7 +43,7 @@ class TestLinkAndLoad:
     def test_link_creates_edge(self):
         from research_paper_agent.concept_graph import link, load
 
-        result = link("research agents", "retrieval", "paper_a.pdf", edge_type="ingest")
+        result = link("research agents", "retrieval", "paper_a.pdf", edge_type="ingest", similarity_score=1.0)
         assert result["type"] == "ingest"
         assert result["weight"] == 1.0
         graph = load()
@@ -53,23 +53,23 @@ class TestLinkAndLoad:
     def test_link_increments_weight(self):
         from research_paper_agent.concept_graph import link, load
 
-        link("research agents", "retrieval", "paper_a.pdf", edge_type="ingest")
-        result = link("research agents", "retrieval", "paper_b.pdf", edge_type="ingest")
+        link("research agents", "retrieval", "paper_a.pdf", edge_type="ingest", similarity_score=1.0)
+        result = link("research agents", "retrieval", "paper_b.pdf", edge_type="ingest", similarity_score=1.0)
         assert result["weight"] == 2.0
         assert result["source_papers"] == ["paper_a.pdf", "paper_b.pdf"]
 
     def test_link_promotes_edge_type(self):
         from research_paper_agent.concept_graph import link, load
 
-        link("research agents", "retrieval", "paper_a.pdf", edge_type="ingest")
-        result = link("research agents", "retrieval", "paper_a.pdf", edge_type="saved")
+        link("research agents", "retrieval", "paper_a.pdf", edge_type="ingest", similarity_score=1.0)
+        result = link("research agents", "retrieval", "paper_a.pdf", edge_type="saved", similarity_score=1.0)
         assert result["type"] == "saved"
 
     def test_link_no_downgrade(self):
         from research_paper_agent.concept_graph import link
 
-        link("research agents", "retrieval", "paper_a.pdf", edge_type="saved")
-        result = link("research agents", "retrieval", "paper_a.pdf", edge_type="ingest")
+        link("research agents", "retrieval", "paper_a.pdf", edge_type="saved", similarity_score=1.0)
+        result = link("research agents", "retrieval", "paper_a.pdf", edge_type="ingest", similarity_score=1.0)
         assert result["type"] == "saved"
 
     def test_link_empty_interest_skipped(self):
@@ -83,7 +83,7 @@ class TestEdgeWeight:
     def test_ingest_bonus(self):
         from research_paper_agent.concept_graph import link, _edge_weight
 
-        link("research agents", "retrieval", "paper_a.pdf", edge_type="ingest")
+        link("research agents", "retrieval", "paper_a.pdf", edge_type="ingest", similarity_score=1.0)
         from research_paper_agent.concept_graph import load
 
         edges = load()["edges"]
@@ -93,7 +93,7 @@ class TestEdgeWeight:
     def test_saved_bonus(self):
         from research_paper_agent.concept_graph import link, _edge_weight
 
-        link("research agents", "retrieval", "paper_a.pdf", edge_type="saved")
+        link("research agents", "retrieval", "paper_a.pdf", edge_type="saved", similarity_score=1.0)
         from research_paper_agent.concept_graph import load
 
         edges = load()["edges"]
@@ -110,8 +110,8 @@ class TestRank:
     def test_ranks_by_graph_weight(self):
         from research_paper_agent.concept_graph import link, rank
 
-        link("research agents", "retrieval", "paper_a.pdf", edge_type="saved")
-        link("research agents", "benchmarks", "paper_b.pdf", edge_type="ingest")
+        link("research agents", "retrieval", "paper_a.pdf", edge_type="saved", similarity_score=1.0)
+        link("research agents", "benchmarks", "paper_b.pdf", edge_type="ingest", similarity_score=1.0)
 
         concepts = [{"name": "benchmarks"}, {"name": "retrieval"}, {"name": "unrelated"}]
         ranked = rank(["research agents"], concepts)
@@ -131,8 +131,8 @@ class TestAnnotate:
     def test_annotate_labels(self):
         from research_paper_agent.concept_graph import link, annotate
 
-        link("research agents", "retrieval", "paper_a.pdf", edge_type="saved")
-        link("research agents", "benchmarks", "paper_b.pdf", edge_type="ingest")
+        link("research agents", "retrieval", "paper_a.pdf", edge_type="saved", similarity_score=1.0)
+        link("research agents", "benchmarks", "paper_b.pdf", edge_type="ingest", similarity_score=1.0)
 
         brief = {
             "source": "paper_a.pdf",
@@ -150,7 +150,7 @@ class TestDecay:
     def test_decay_removes_stale_engaged(self):
         from research_paper_agent.concept_graph import link, decay, load
 
-        link("research agents", "old_topic", "paper_a.pdf", edge_type="engaged")
+        link("research agents", "old_topic", "paper_a.pdf", edge_type="engaged", similarity_score=1.0)
         # Artificially age the edge.
         graph = load()
         old = "1900-01-01T00:00:00+00:00"
@@ -165,7 +165,7 @@ class TestDecay:
     def test_decay_preserves_saved(self):
         from research_paper_agent.concept_graph import link, decay, load
 
-        link("research agents", "forever", "paper_a.pdf", edge_type="saved")
+        link("research agents", "forever", "paper_a.pdf", edge_type="saved", similarity_score=1.0)
         graph = load()
         graph["edges"]["research agents"]["forever"]["last_engaged_at"] = (
             "1900-01-01T00:00:00+00:00"
@@ -183,7 +183,7 @@ class TestGetConceptGraph:
     def test_returns_summary(self):
         from research_paper_agent.concept_graph import link, get_concept_graph
 
-        link("research agents", "retrieval", "paper_a.pdf", edge_type="saved")
+        link("research agents", "retrieval", "paper_a.pdf", edge_type="saved", similarity_score=1.0)
         summary = get_concept_graph()
         assert summary["edge_count"] == 1
         assert summary["edges"][0]["interest"] == "research agents"
