@@ -19,9 +19,14 @@ CONCEPT_GRAPH_PATH = _USER_MODEL_DIR / "concept_graph.json"
 
 _EDGE_TYPES = frozenset({"ingest", "engaged", "saved"})
 
+# In-memory cache — invalidated on every _save().
+_graph_cache: dict[str, Any] | None = None
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+_TYPE_BONUS = {"ingest": 0.5, "engaged": 1.0, "saved": 2.0}
 
 
 def _now_iso() -> str:
@@ -32,6 +37,23 @@ def _default_graph() -> dict[str, Any]:
     return {"schema_version": 1, "edges": {}}
 
 
+def _tokens(text: str) -> set[str]:
+    """Tokenise a phrase into a set of meaningful lowercase words."""
+    return {word for word in text.lower().split() if len(word) > 2}
+
+
+def _edge_weight(
+    edges: dict[str, dict[str, dict[str, Any]]],
+    interest_key: str,
+    concept_key: str,
+) -> float:
+    """Return the scored weight of a single interest→concept edge, or 0.0."""
+    edge = edges.get(interest_key, {}).get(concept_key)
+    if edge is None:
+        return 0.0
+    return edge.get("weight", 1.0) * _TYPE_BONUS.get(edge.get("type", "ingest"), 0.5)
+
+
 # ---------------------------------------------------------------------------
 # Public interface
 # ---------------------------------------------------------------------------
@@ -39,24 +61,33 @@ def _default_graph() -> dict[str, Any]:
 
 def load() -> dict[str, Any]:
     """Load the concept graph, returning defaults when the file is missing."""
+    global _graph_cache
+    if _graph_cache is not None:
+        return _graph_cache
     _USER_MODEL_DIR.mkdir(parents=True, exist_ok=True)
     if not CONCEPT_GRAPH_PATH.exists():
         graph = _default_graph()
         CONCEPT_GRAPH_PATH.write_text(json.dumps(graph, indent=2), encoding="utf-8")
+        _graph_cache = graph
         return graph
     try:
-        return json.loads(CONCEPT_GRAPH_PATH.read_text(encoding="utf-8"))
+        graph = json.loads(CONCEPT_GRAPH_PATH.read_text(encoding="utf-8"))
+        _graph_cache = graph
+        return graph
     except json.JSONDecodeError:
         graph = _default_graph()
         graph["recovery_note"] = "concept_graph.json was unreadable and defaults were restored."
         CONCEPT_GRAPH_PATH.write_text(json.dumps(graph, indent=2), encoding="utf-8")
+        _graph_cache = graph
         return graph
 
 
 def _save(graph: dict[str, Any]) -> None:
+    global _graph_cache
     _USER_MODEL_DIR.mkdir(parents=True, exist_ok=True)
     graph["updated_at"] = _now_iso()
     CONCEPT_GRAPH_PATH.write_text(json.dumps(graph, indent=2), encoding="utf-8")
+    _graph_cache = graph
 
 
 def link(
@@ -191,18 +222,15 @@ def rank(
     The same concept list with a ``graph_weight`` field added, sorted
     highest-weight first.  Concepts with no graph match get weight 0.
     """
-    graph = load()
-    edges = graph.get("edges", {})
+    decay()
+    edges = load().get("edges", {})
 
     for concept in concepts:
         concept_key = concept.get("name", "").strip().lower()
-        total = 0.0
-        for interest in user_interests:
-            interest_key = interest.strip().lower()
-            edge = edges.get(interest_key, {}).get(concept_key)
-            if edge is not None:
-                type_bonus = {"ingest": 0.5, "engaged": 1.0, "saved": 2.0}
-                total += edge.get("weight", 1.0) * type_bonus.get(edge.get("type", "ingest"), 0.5)
+        total = sum(
+            _edge_weight(edges, interest.strip().lower(), concept_key)
+            for interest in user_interests
+        )
         concept["graph_weight"] = round(total, 2)
 
     concepts.sort(key=lambda c: c.get("graph_weight", 0), reverse=True)
@@ -229,19 +257,16 @@ def annotate(
     -------
     The same brief with ``interest_match`` added to each concept entry.
     """
-    graph = load()
-    edges = graph.get("edges", {})
+    decay()
+    edges = load().get("edges", {})
 
     for bucket_key in ("top_concepts", "concepts"):
         for concept in brief.get(bucket_key, []):
             concept_key = concept.get("name", "").strip().lower()
-            total = 0.0
-            for interest in user_interests:
-                interest_key = interest.strip().lower()
-                edge = edges.get(interest_key, {}).get(concept_key)
-                if edge is not None:
-                    type_bonus = {"ingest": 0.5, "engaged": 1.0, "saved": 2.0}
-                    total += edge.get("weight", 1.0) * type_bonus.get(edge.get("type", "ingest"), 0.5)
+            total = sum(
+                _edge_weight(edges, interest.strip().lower(), concept_key)
+                for interest in user_interests
+            )
 
             if total >= 2.0:
                 concept["interest_match"] = "high"
@@ -258,8 +283,19 @@ def annotate(
 # ---------------------------------------------------------------------------
 
 
+def token_overlap(interest: str, concept: str, min_shared: int = 1) -> bool:
+    """Return True when an interest and concept share enough meaningful tokens.
+
+    Uses token-set intersection instead of naive substring matching.
+    "interest = \"research agents\"" and "concept = \"agent-building workflows\""
+    share the token ``"agent"`` → True.
+    """
+    return len(_tokens(interest) & _tokens(concept)) >= min_shared
+
+
 def get_concept_graph() -> dict[str, Any]:
     """Inspect the local concept graph (interest-to-concept edges with weights)."""
+    decay()
     graph = load()
     edges = graph.get("edges", {})
     summary = []

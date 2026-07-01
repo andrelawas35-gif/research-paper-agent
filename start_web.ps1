@@ -7,7 +7,7 @@ $ArtifactsDir = Join-Path $AdkDir "artifacts"
 $SessionDb = Join-Path $AdkDir "session.db"
 $SessionDbUriPath = $SessionDb.Replace("\", "/")
 $ArtifactsUriPath = $ArtifactsDir.Replace("\", "/")
-$AdkExe = "C:\Users\Andre\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\Scripts\adk.exe"
+$AdkExe = (Get-Command adk.exe -ErrorAction Stop).Source
 
 New-Item -ItemType Directory -Force -Path $AdkDir | Out-Null
 New-Item -ItemType Directory -Force -Path $ArtifactsDir | Out-Null

@@ -130,9 +130,12 @@ def _read_pdf_pages(path: Path) -> list[dict[str, Any]]:
     reader = PdfReader(str(path))
     pages = []
     for index, page in enumerate(reader.pages, start=1):
-        text = page.extract_text() or ""
-        if text.strip():
-            pages.append({"page": index, "text": text})
+        try:
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append({"page": index, "text": text})
+        except Exception:
+            continue  # skip corrupt pages
     return pages
 
 
@@ -282,6 +285,10 @@ def _paper_record_path(paper_path: Path) -> Path:
 
 
 def _load_records() -> list[dict[str, Any]]:
+    """Load ingested paper records, cached in memory after first read."""
+    cache = getattr(_load_records, "_cache", None)
+    if cache is not None:
+        return cache
     _ensure_dirs()
     records = []
     for path in sorted(KNOWLEDGE_DIR.glob("*.json")):
@@ -289,6 +296,7 @@ def _load_records() -> list[dict[str, Any]]:
             records.append(json.loads(path.read_text(encoding="utf-8")))
         except json.JSONDecodeError:
             continue
+    _load_records._cache = records  # type: ignore[attr-defined]
     return records
 
 
@@ -409,6 +417,10 @@ def _default_user_profile() -> dict[str, Any]:
 
 
 def _load_user_profile() -> dict[str, Any]:
+    """Load the user profile, cached in memory after first read."""
+    cache = getattr(_load_user_profile, "_cache", None)
+    if cache is not None:
+        return cache
     _ensure_dirs()
     if not USER_PROFILE_PATH.exists():
         profile = _default_user_profile()
@@ -420,13 +432,17 @@ def _load_user_profile() -> dict[str, Any]:
         profile = _default_user_profile()
         profile["recovery_note"] = "profile.json was unreadable and defaults were restored."
         USER_PROFILE_PATH.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+        _load_user_profile._cache = profile  # type: ignore[attr-defined]
         return profile
+    _load_user_profile._cache = profile  # type: ignore[attr-defined]
+    return profile
 
 
 def _save_user_profile(profile: dict[str, Any]) -> None:
     _ensure_dirs()
     profile["updated_at"] = _now_iso()
     USER_PROFILE_PATH.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+    _load_user_profile._cache = profile  # type: ignore[attr-defined]
 
 
 def _append_unique_signal(profile: dict[str, Any], bucket: str, key: str, item: dict[str, Any]) -> bool:
@@ -565,6 +581,16 @@ def _note_cards_for_records(records: list[dict[str, Any]]) -> list[dict[str, Any
     return cards
 
 
+def _try_annotate_brief(brief: dict[str, Any]) -> dict[str, Any]:
+    """Best-effort concept-graph annotation; returns brief unchanged on failure."""
+    try:
+        profile = _load_user_profile()
+        user_interests = [item.get("name", "") for item in profile.get("interests", [])]
+        return concept_graph.annotate(brief, user_interests)
+    except Exception:
+        return brief
+
+
 def _adaptive_question(
     question_id: str,
     question: str,
@@ -652,16 +678,22 @@ def ingest_paper(file_name: str) -> dict[str, Any]:
     output_path = _paper_record_path(path)
     output_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
 
+    # Invalidate cached records so next reader picks up the new paper.
+    _load_records._cache = None  # type: ignore[attr-defined]
+
     # --- concept graph: link extracted concepts to user interests ---
-    profile = _load_user_profile()
-    for interest in profile.get("interests", []):
-        interest_name = interest.get("name", "")
-        if not interest_name:
-            continue
-        for concept in notes["concepts"]:
-            concept_name = concept.get("name", "")
-            if concept_name and concept_name.lower() in interest_name.lower():
-                concept_graph.link(interest_name, concept_name, path.name, edge_type="ingest")
+    try:
+        profile = _load_user_profile()
+        for interest in profile.get("interests", []):
+            interest_name = interest.get("name", "")
+            if not interest_name:
+                continue
+            for concept in notes["concepts"]:
+                concept_name = concept.get("name", "")
+                if concept_name and concept_graph.token_overlap(interest_name, concept_name):
+                    concept_graph.link(interest_name, concept_name, path.name, edge_type="ingest")
+    except Exception:
+        pass  # graph linking is best-effort; never block ingest
 
     return {
         "status": "ok",
@@ -675,9 +707,14 @@ def ingest_paper(file_name: str) -> dict[str, Any]:
 
 
 def ingest_all_papers() -> dict[str, Any]:
-    """Ingest every supported paper in papers/."""
+    """Ingest every supported paper in papers/; one bad file does not kill the batch."""
     papers = list_papers()["papers"]
-    results = [ingest_paper(name) for name in papers]
+    results = []
+    for name in papers:
+        try:
+            results.append(ingest_paper(name))
+        except Exception as exc:
+            results.append({"status": "error", "source": name, "message": str(exc)})
     return {"ingested": results, "count": len(results)}
 
 
@@ -741,7 +778,7 @@ def paper_brief(source: str = "") -> dict[str, Any]:
 
     return {
         "briefs": [
-            concept_graph.annotate(
+            _try_annotate_brief(
                 {
                     "source": record["source"],
                     "metadata": record.get("metadata", {}),
@@ -750,8 +787,7 @@ def paper_brief(source: str = "") -> dict[str, Any]:
                     "findings": record.get("notes", {}).get("findings", [])[:4],
                     "limitations": record.get("notes", {}).get("limitations", [])[:4],
                     "open_questions": record.get("notes", {}).get("open_questions", [])[:4],
-                },
-                [item.get("name", "") for item in _load_user_profile().get("interests", [])],
+                }
             )
             for record in records
         ]
@@ -977,9 +1013,12 @@ def adaptive_grill(topic: str = "", source: str = "", question_count: int = 5) -
     cards = _note_cards_for_records(records)
 
     # --- concept graph: rank cards by user-interest weight ---
-    user_interests = [item.get("name", "") for item in profile.get("interests", [])]
-    if user_interests:
-        cards = concept_graph.rank(user_interests, cards)
+    try:
+        user_interests = [item.get("name", "") for item in profile.get("interests", [])]
+        if user_interests:
+            cards = concept_graph.rank(user_interests, cards)
+    except Exception:
+        pass  # best-effort ranking; fall back to default card order
 
     questions: list[dict[str, Any]] = []
     max_questions = max(1, min(question_count, 12))
@@ -1123,16 +1162,19 @@ def respond_to_adaptive_grill(question_id: str, user_answer: str, question_text:
 
     # --- concept graph: link the grill question's concept to user interests ---
     if question_text:
-        profile = _load_user_profile()
-        for interest in profile.get("interests", []):
-            interest_name = interest.get("name", "")
-            if interest_name and any(
-                token in question_text.lower()
-                for token in interest_name.lower().split()
-            ):
-                concept_graph.link(
-                    interest_name, question_text[:120], "adaptive_grill", edge_type="engaged"
-                )
+        try:
+            profile = _load_user_profile()
+            for interest in profile.get("interests", []):
+                interest_name = interest.get("name", "")
+                if interest_name and any(
+                    token in question_text.lower()
+                    for token in interest_name.lower().split()
+                ):
+                    concept_graph.link(
+                        interest_name, question_text[:120], "adaptive_grill", edge_type="engaged"
+                    )
+        except Exception:
+            pass  # best-effort graph linking
 
     lower = user_answer.lower()
     durable_updates = []
