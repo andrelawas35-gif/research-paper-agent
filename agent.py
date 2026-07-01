@@ -1610,6 +1610,29 @@ def get_tutor_progress() -> dict[str, Any]:
     }
 
 
+def _safe_tool(fn):
+    """Wrap a tool function so exceptions return an error dict instead of raising.
+
+    This prevents the ADK from sending malformed message chains to the LLM
+    when a tool call fails mid-execution.  DeepSeek's API is strict about
+    requiring a tool response for every tool_call_id.
+    """
+    from functools import wraps
+
+    @wraps(fn)
+    def _wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            return {
+                "status": "error",
+                "tool": fn.__name__,
+                "message": str(exc)[:500],
+            }
+
+    return _wrapper
+
+
 root_agent = Agent(
     model=DeepSeekLlm(),
     name="research_paper_agent",
@@ -1685,23 +1708,23 @@ root_agent = Agent(
         "grounded, adaptive, and appropriately detailed."
     ),
     tools=[
-        list_papers,
-        ingest_paper,
-        ingest_all_papers,
-        list_concepts,
-        search_evidence,
-        paper_brief,
-        compare_papers,
-        make_study_guide,
-        get_user_profile,
-        learn_from_user_message,
-        record_interaction,
-        set_user_preference,
-        self_improvement_audit,
-        adaptive_grill,
-        respond_to_adaptive_grill,
-        concept_graph.get_concept_graph,
-        record_tutor_answer,
-        get_tutor_progress,
+        _safe_tool(list_papers),
+        _safe_tool(ingest_paper),
+        _safe_tool(ingest_all_papers),
+        _safe_tool(list_concepts),
+        _safe_tool(search_evidence),
+        _safe_tool(paper_brief),
+        _safe_tool(compare_papers),
+        _safe_tool(make_study_guide),
+        _safe_tool(get_user_profile),
+        _safe_tool(learn_from_user_message),
+        _safe_tool(record_interaction),
+        _safe_tool(set_user_preference),
+        _safe_tool(self_improvement_audit),
+        _safe_tool(adaptive_grill),
+        _safe_tool(respond_to_adaptive_grill),
+        _safe_tool(concept_graph.get_concept_graph),
+        _safe_tool(record_tutor_answer),
+        _safe_tool(get_tutor_progress),
     ],
 )
