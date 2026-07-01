@@ -14,7 +14,7 @@ from google.adk.labs.openai import OpenAILlm
 from openai import AsyncOpenAI
 from openai import OpenAI
 
-from . import concept_graph
+from . import concept_graph, personal_notes
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -28,6 +28,7 @@ CANDIDATE_SIGNALS_PATH = USER_MODEL_DIR / "candidate_signals.jsonl"
 CONCEPT_GRAPH_PATH = USER_MODEL_DIR / "concept_graph.json"
 TUTOR_PROGRESS_PATH = USER_MODEL_DIR / "tutor_progress.json"
 TUTOR_SESSIONS_PATH = USER_MODEL_DIR / "tutor_sessions.jsonl"
+PERSONAL_NOTES_PATH = USER_MODEL_DIR / "personal_notes.jsonl"
 
 
 STOPWORDS = {
@@ -1321,6 +1322,51 @@ def set_user_preference(category: str, value: str, evidence: str = "", confidenc
     }
 
 
+def save_personal_note(
+    text: str,
+    title: str = "",
+    user_tags: str = "",
+    concepts: str = "",
+) -> dict[str, Any]:
+    """Save an explicit personal note locally.
+
+    Use for prompts such as ``note:``, ``save note:``, ``remember note:``,
+    or when the user directly asks to store a personal/knowledge-management
+    note. Do not use this for ordinary unmarked chat.
+    """
+    return personal_notes.save_note(
+        text=text,
+        title=title,
+        user_tags=user_tags,
+        concepts=concepts,
+        path=PERSONAL_NOTES_PATH,
+    )
+
+
+def list_personal_notes() -> dict[str, Any]:
+    """List non-deleted personal notes with summary metadata."""
+    return personal_notes.list_notes(path=PERSONAL_NOTES_PATH)
+
+
+def get_personal_note(note_id: str) -> dict[str, Any]:
+    """Return one full personal note by id."""
+    return personal_notes.get_note(note_id=note_id, path=PERSONAL_NOTES_PATH)
+
+
+def search_personal_notes(query: str, max_notes: int = 10) -> dict[str, Any]:
+    """Search personal notes by text, title, tags, concepts, and note cards."""
+    return personal_notes.search_notes(
+        query=query,
+        max_notes=max_notes,
+        path=PERSONAL_NOTES_PATH,
+    )
+
+
+def delete_personal_note(note_id: str) -> dict[str, Any]:
+    """Soft-delete a personal note. It remains on disk but is hidden from list/search."""
+    return personal_notes.soft_delete_note(note_id=note_id, path=PERSONAL_NOTES_PATH)
+
+
 def self_improvement_audit() -> dict[str, Any]:
     """Review the user model and suggest how the agent should adapt next."""
     profile = _load_user_profile()
@@ -1887,6 +1933,12 @@ root_agent = Agent(
         "and concept-graph edges. delete_paper defaults to dry-run preview; only "
         "execute when the user confirms. organize_papers accepts a mapping of "
         "{old_name: new_name} and runs each rename independently. "
+        "Use save_personal_note only for explicit note capture prompts such as "
+        "'note:', 'save note:', 'remember note:', or direct requests to store a "
+        "personal knowledge-management note. Do not save ordinary unmarked chat "
+        "as a note. Use list_personal_notes, get_personal_note, and "
+        "search_personal_notes when the user asks about their notes. Treat personal "
+        "notes as the user's knowledge/context, not as source-backed paper evidence. "
         "Separate source-backed "
         "claims from your own inference. Before giving a personalized recommendation "
         "from a paper, establish at least one cited source-backed claim first; label "
@@ -1968,6 +2020,11 @@ root_agent = Agent(
         _safe_tool(learn_from_user_message),
         _safe_tool(record_interaction),
         _safe_tool(set_user_preference),
+        _safe_tool(save_personal_note),
+        _safe_tool(list_personal_notes),
+        _safe_tool(get_personal_note),
+        _safe_tool(search_personal_notes),
+        _safe_tool(delete_personal_note),
         _safe_tool(self_improvement_audit),
         _safe_tool(adaptive_grill),
         _safe_tool(respond_to_adaptive_grill),

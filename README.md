@@ -11,15 +11,24 @@ A local Google ADK agent that reads papers, extracts concepts, and answers quest
 - Searches ingested evidence with weighted lexical ranking before answering
 - Compares papers by concepts, methods, findings, and limitations
 - Builds citation-backed study guides and recall questions
+- Saves explicit personal notes locally in `user_model/personal_notes.jsonl`
 - Learns local user preferences, interests, question patterns, and communication quirks
 - Separates source-backed claims from inference
 
 ## Setup
 
-1. Install dependencies:
+1. Create a Python 3.10+ virtual environment and install dependencies:
 
-```powershell
-C:\Users\Andre\AppData\Local\Microsoft\WindowsApps\python3.13.exe -m pip install -r research_paper_agent\requirements.txt
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt
+```
+
+In this local Codex workspace, the bundled Python 3.12 runtime works:
+
+```bash
+/Users/andrelawas/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -m venv .venv
 ```
 
 2. Put papers in `papers/`.
@@ -27,14 +36,14 @@ C:\Users\Andre\AppData\Local\Microsoft\WindowsApps\python3.13.exe -m pip install
 4. Add your DeepSeek API key.
 5. From the parent folder, run:
 
-```powershell
-C:\Users\Andre\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\Scripts\adk.exe run research_paper_agent
+```bash
+research_paper_agent/.venv/bin/adk run research_paper_agent
 ```
 
 For a browser UI:
 
-```powershell
-C:\Users\Andre\Documents\Codex\2026-06-30\g\outputs\research_paper_agent\start_web.ps1
+```bash
+research_paper_agent/.venv/bin/adk web .
 ```
 
 The launcher creates `.adk` storage and passes explicit SQLite/artifact paths to ADK. Use it if the web UI reports `sqlite3.OperationalError: unable to open database file`.
@@ -51,6 +60,8 @@ The launcher creates `.adk` storage and passes explicit SQLite/artifact paths to
 - `Make me a study guide with recall questions.`
 - `Quiz me on the most important concepts from the papers.`
 - `Learn this about me: I like short answers with exact commands.`
+- `note: Concept-derived backlinks should come before manual wiki links.`
+- `Search my notes for concept graph.`
 - `Remember that I care about AI agents, research workflows, and self-improving tools.`
 - `Audit how you should improve around my style.`
 - `Grill me on this paper based on what you know about me.`
@@ -70,6 +81,11 @@ The launcher creates `.adk` storage and passes explicit SQLite/artifact paths to
 - `learn_from_user_message`: updates the profile from a message
 - `record_interaction`: appends an interaction event to the local log
 - `set_user_preference`: stores an explicit preference, interest, quirk, or avoidance
+- `save_personal_note`: stores an explicit personal note locally
+- `list_personal_notes`: lists non-deleted personal notes
+- `get_personal_note`: returns a full note by ID
+- `search_personal_notes`: searches note text, tags, concepts, and cards
+- `delete_personal_note`: soft-deletes a personal note
 - `self_improvement_audit`: suggests how the agent should adapt next
 - `adaptive_grill`: asks personalized questions from the user model and ingested text
 - `respond_to_adaptive_grill`: learns from a grill answer and recommends the next step
@@ -88,6 +104,12 @@ Useful prompts:
 - `Ask me one question at a time based on my quirks and this paper.`
 
 The profile is inspectable at `user_model/profile.json`. Interaction logs are written to `user_model/interaction_log.jsonl`.
+
+## Personal Notes
+
+The agent saves personal notes only when you explicitly ask, using prompts like `note:`, `save note:`, or `remember note:`. Notes are local JSONL records in `user_model/personal_notes.jsonl` and are treated as your knowledge/context, not as cited paper evidence.
+
+Deleted notes are soft-deleted: normal list/search hides them, but the record stays on disk for recovery and future audit tools.
 
 ## Adaptive Grill
 
@@ -116,6 +138,6 @@ Use `deepseek-v4-pro` for a stronger model, or `deepseek-v4-flash` for the defau
 
 PDF ingestion uses `pypdf` for local text extraction. It is included in `requirements.txt`:
 
-```powershell
-C:\Users\Andre\AppData\Local\Microsoft\WindowsApps\python3.13.exe -m pip install -r research_paper_agent\requirements.txt
+```bash
+.venv/bin/pip install -r requirements.txt
 ```
