@@ -103,3 +103,23 @@ A directed connection from a User Interest to a Paper Concept. Three edge types 
 ## Concept Match
 
 The agent's annotation of a paper concept with an interest-match label (high/medium/low) derived from the Concept Graph. Used in paper briefs to signal relevance to the user's stated interests.
+
+## Tutor Mode
+
+An Agent Mode where the agent teaches paper concepts through an explain-then-quiz loop, grades free-text answers via LLM, and adapts the curriculum to the user's mastery level. Defaults to alternating between weak-area drilling and interest-aligned exploration, with the user able to steer at any time.
+
+## Tutor Session
+
+A durable teaching interaction tracked in `user_model/tutor_progress.json` (concept-level mastery summary) and `user_model/tutor_sessions.jsonl` (full answer audit trail). Each entry records the concept, question, user answer, correctness verdict, and an optional mastery hint.
+
+## Mastery Level
+
+A per-concept score derived from `times_correct / max(1, times_asked)` stored in the Tutor Progress file. Concepts with mastery below 0.5 are considered weak and prioritized for drilling; concepts at 1.0 are considered mastered and deprioritized.
+
+## Answer Grading
+
+An internal LLM call that judges a free-text tutor answer against the cited passage, returning CORRECT or INCORRECT with a one-sentence reason and an optional mastery hint (e.g., "correct but confused retrieval with generation"). Not exposed as a user-facing tool.
+
+## Curriculum Pathing
+
+The tutor's concept-selection strategy. Alternates between the lowest-mastery concept (weak-area drilling) and the highest-interest unmastered concept (engagement). The user can override at any point by naming a concept or topic.

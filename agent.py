@@ -12,6 +12,7 @@ from typing import Any
 from google.adk.agents.llm_agent import Agent
 from google.adk.labs.openai import OpenAILlm
 from openai import AsyncOpenAI
+from openai import OpenAI
 
 from . import concept_graph
 
@@ -25,6 +26,8 @@ INTERACTION_LOG_PATH = USER_MODEL_DIR / "interaction_log.jsonl"
 GRILL_LOG_PATH = USER_MODEL_DIR / "adaptive_grill_sessions.jsonl"
 CANDIDATE_SIGNALS_PATH = USER_MODEL_DIR / "candidate_signals.jsonl"
 CONCEPT_GRAPH_PATH = USER_MODEL_DIR / "concept_graph.json"
+TUTOR_PROGRESS_PATH = USER_MODEL_DIR / "tutor_progress.json"
+TUTOR_SESSIONS_PATH = USER_MODEL_DIR / "tutor_sessions.jsonl"
 
 
 STOPWORDS = {
@@ -1220,6 +1223,214 @@ def respond_to_adaptive_grill(question_id: str, user_answer: str, question_text:
     }
 
 
+# ---------------------------------------------------------------------------
+# Tutor Mode — helpers and tools
+# ---------------------------------------------------------------------------
+
+
+def _load_tutor_progress() -> dict[str, Any]:
+    """Load concept-level mastery summary, cached in memory."""
+    cache = getattr(_load_tutor_progress, "_cache", None)
+    if cache is not None:
+        return cache
+    _ensure_dirs()
+    if not TUTOR_PROGRESS_PATH.exists():
+        progress: dict[str, Any] = {"schema_version": 1, "concepts": {}}
+        TUTOR_PROGRESS_PATH.write_text(json.dumps(progress, indent=2), encoding="utf-8")
+        _load_tutor_progress._cache = progress  # type: ignore[attr-defined]
+        return progress
+    try:
+        progress = json.loads(TUTOR_PROGRESS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        progress = {"schema_version": 1, "concepts": {}, "recovery_note": "file was unreadable"}
+        TUTOR_PROGRESS_PATH.write_text(json.dumps(progress, indent=2), encoding="utf-8")
+    _load_tutor_progress._cache = progress  # type: ignore[attr-defined]
+    return progress
+
+
+def _save_tutor_progress(progress: dict[str, Any]) -> None:
+    _ensure_dirs()
+    progress["updated_at"] = _now_iso()
+    TUTOR_PROGRESS_PATH.write_text(json.dumps(progress, indent=2), encoding="utf-8")
+    _load_tutor_progress._cache = progress  # type: ignore[attr-defined]
+
+
+def _next_concept(
+    progress: dict[str, Any],
+    user_interests: list[str],
+    last_was_weak: bool,
+) -> dict[str, Any]:
+    """Pick the next concept to teach using alternating weak/interest strategy."""
+    concepts = progress.get("concepts", {})
+    weak: list[dict[str, Any]] = []
+    strong: list[dict[str, Any]] = []
+
+    for key, entry in concepts.items():
+        asked = max(entry.get("times_asked", 0), 1)
+        ratio = entry.get("times_correct", 0) / asked
+        entry["_key"] = key
+        if ratio < 0.5:
+            weak.append(entry)
+        elif ratio < 1.0:
+            strong.append(entry)
+
+    weak.sort(key=lambda e: e.get("times_correct", 0) / max(e.get("times_asked", 1), 1))
+
+    if not last_was_weak and weak:
+        target = weak[0]
+        return {"concept": target["_key"], "reason": "weak concept — only {}/{} correct".format(
+            target.get("times_correct", 0), target.get("times_asked", 1))}
+
+    if strong:
+        target = strong[-1]
+        return {"concept": target["_key"], "reason": "strong concept — reinforce before mastery"}
+
+    if weak:
+        target = weak[0]
+        return {"concept": target["_key"], "reason": "weak concept — {}/{} correct".format(
+            target.get("times_correct", 0), target.get("times_asked", 1))}
+
+    if user_interests:
+        return {"concept": user_interests[0], "reason": "new session — starting with your top interest"}
+    return {"concept": None, "reason": "no progress and no interests — ask the user what to study"}
+
+
+def _grade_answer(question: str, user_answer: str, passage_text: str) -> dict[str, Any]:
+    """Grade a free-text tutor answer via LLM.  Returns CORRECT / INCORRECT + reason."""
+    client = OpenAI(
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+    )
+    prompt = (
+        "You are grading a student's answer to a question about a research paper.\n\n"
+        f"Question: {question}\n\n"
+        f"Source passage: {passage_text[:1200]}\n\n"
+        f"Student answer: {user_answer}\n\n"
+        "Reply with exactly one line: CORRECT or INCORRECT, followed by a one-sentence "
+        "reason. If the answer is partially correct but misses something important, say "
+        "INCORRECT and explain what's missing. If the answer is mostly right but has a "
+        "minor confusion, say CORRECT and note the confusion as a hint.\n\n"
+        "Format: VERDICT. Reason. [HINT: optional one-sentence teaching hint]"
+    )
+    try:
+        response = client.chat.completions.create(
+            model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=120,
+            temperature=0.0,
+        )
+        text = response.choices[0].message.content or "INCORRECT. Could not grade."
+    except Exception:
+        return {"correct": False, "verdict": "INCORRECT", "reason": "grading error", "raw": ""}
+
+    upper = text.strip().upper()
+    correct = upper.startswith("CORRECT")
+    parts = text.split(". ", 1)
+    reason = parts[1] if len(parts) > 1 else text
+    hint = ""
+    if "HINT:" in reason:
+        reason, hint = reason.split("HINT:", 1)
+
+    return {
+        "correct": correct,
+        "verdict": "CORRECT" if correct else "INCORRECT",
+        "reason": reason.strip(),
+        "mastery_hint": hint.strip() if hint else None,
+        "raw": text,
+    }
+
+
+def record_tutor_answer(
+    concept: str,
+    question: str,
+    user_answer: str,
+    source: str = "",
+    passage_text: str = "",
+) -> dict[str, Any]:
+    """Grade a tutor answer, record progress, update the concept graph, and suggest the next concept."""
+    grade = _grade_answer(question, user_answer, passage_text) if passage_text else {"correct": True, "verdict": "CORRECT", "reason": "no passage to grade against", "mastery_hint": None}
+    correct = grade["correct"]
+
+    # Update tutor progress.
+    progress = _load_tutor_progress()
+    concepts = progress.setdefault("concepts", {})
+    key = concept.strip().lower()
+    entry = concepts.setdefault(key, {"concept": concept, "times_asked": 0, "times_correct": 0, "last_seen": None})
+    entry["times_asked"] += 1
+    if correct:
+        entry["times_correct"] += 1
+    entry["last_seen"] = _now_iso()
+    if grade.get("mastery_hint"):
+        entry.setdefault("mastery_hints", []).append(grade["mastery_hint"])
+    _save_tutor_progress(progress)
+
+    # Log the session event.
+    _ensure_dirs()
+    session_event = {
+        "timestamp": _now_iso(),
+        "concept": concept,
+        "question": question,
+        "user_answer": user_answer,
+        "correct": correct,
+        "verdict": grade["verdict"],
+        "reason": grade["reason"],
+        "mastery_hint": grade.get("mastery_hint"),
+        "source": source or None,
+    }
+    with TUTOR_SESSIONS_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(session_event) + "\n")
+
+    # Strengthen the concept graph — tutor engagement is engagement.
+    try:
+        profile = _load_user_profile()
+        for interest in profile.get("interests", []):
+            interest_name = interest.get("name", "")
+            if interest_name and concept_graph.token_overlap(interest_name, concept):
+                concept_graph.link(interest_name, concept, source or "tutor_session", edge_type="engaged")
+    except Exception:
+        pass
+
+    # Suggest the next concept.
+    user_interests = [item.get("name", "") for item in _load_user_profile().get("interests", [])]
+    asked = max(entry.get("times_asked", 1), 1)
+    ratio = entry.get("times_correct", 0) / asked
+    last_was_weak = ratio < 0.5
+    next_concept = _next_concept(progress, user_interests, last_was_weak)
+
+    return {
+        "status": "ok",
+        "concept": concept,
+        "correct": correct,
+        "verdict": grade["verdict"],
+        "reason": grade["reason"],
+        "mastery_hint": grade.get("mastery_hint"),
+        "progress": {"times_asked": entry["times_asked"], "times_correct": entry["times_correct"]},
+        "suggested_next_concept": next_concept,
+        "sessions_log_path": str(TUTOR_SESSIONS_PATH),
+    }
+
+
+def get_tutor_progress() -> dict[str, Any]:
+    """Inspect tutor progress — concept-level mastery summary."""
+    progress = _load_tutor_progress()
+    summary = []
+    for key, entry in sorted(progress.get("concepts", {}).items()):
+        asked = max(entry.get("times_asked", 0), 1)
+        summary.append({
+            "concept": entry.get("concept", key),
+            "times_asked": entry.get("times_asked", 0),
+            "times_correct": entry.get("times_correct", 0),
+            "mastery": round(entry.get("times_correct", 0) / asked, 2),
+            "last_seen": entry.get("last_seen"),
+        })
+    return {
+        "progress_path": str(TUTOR_PROGRESS_PATH),
+        "sessions_log_path": str(TUTOR_SESSIONS_PATH),
+        "concept_count": len(summary),
+        "concepts": summary,
+    }
+
+
 root_agent = Agent(
     model=DeepSeekLlm(),
     name="research_paper_agent",
@@ -1254,7 +1465,13 @@ root_agent = Agent(
         "source understanding; Grill Mode means one pointed adaptive question at a time; "
         "Builder Mode means turn research into agent/tool/workflow ideas; Taste Mode "
         "means judge skim/study/compare/discard; Artifact Mode means create confirmed "
-        "durable outputs; Profile Mode means inspect or update the user model. "
+        "durable outputs; Profile Mode means inspect or update the user model; "
+        "Tutor Mode means teach paper concepts through an explain-then-quiz loop "
+        "with adaptive curriculum. In Tutor Mode, use search_evidence to find a "
+        "cited passage, explain the concept, ask one question via adaptive_grill, "
+        "then call record_tutor_answer to grade the response and suggest the next "
+        "concept. Alternate between drilling weak concepts and exploring high-interest "
+        "ones; let the user steer at any point. "
         "Prioritize the current session goal over the long-term user profile; use the "
         "profile to shape style and suggestions, then include adjacent possibilities "
         "only after the session goal is served. Infer the session goal by default; "
@@ -1302,5 +1519,7 @@ root_agent = Agent(
         adaptive_grill,
         respond_to_adaptive_grill,
         concept_graph.get_concept_graph,
+        record_tutor_answer,
+        get_tutor_progress,
     ],
 )
