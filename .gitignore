@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+knowledge_base/*.json
+user_model/*.json
+user_model/*.jsonl
+papers/*
+!papers/.gitkeep
+!user_model/.gitkeep
+.adk/*
+!.adk/.gitkeep
