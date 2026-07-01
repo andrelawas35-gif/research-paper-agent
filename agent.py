@@ -654,6 +654,72 @@ def list_papers() -> dict[str, Any]:
     return {"papers_dir": str(PAPERS_DIR), "papers": files}
 
 
+def _infer_dependencies(concepts: list[dict[str, Any]], source_paper: str) -> int:
+    """Ask the LLM to infer prerequisite hints among the extracted concepts.
+
+    Returns the number of prerequisite edges created.  Best-effort — failures
+    are silent and never block ingest.
+    """
+    concept_names = [c.get("name", "") for c in concepts if c.get("name")]
+    if len(concept_names) < 2:
+        return 0  # need at least two concepts to infer a relationship
+
+    try:
+        client = OpenAI(
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        )
+        prompt = (
+            "You are helping build a curriculum for a research-paper tutor.\n\n"
+            "Here are concepts extracted from a paper:\n"
+            + "\n".join(f"- {name}" for name in concept_names)
+            + "\n\n"
+            "For each concept that pedagogically depends on another (the prerequisite should "
+            "be taught first for better understanding), output one line in this exact format:\n"
+            "  concept_name ← prerequisite_name\n\n"
+            "Only output lines for genuine pedagogical dependencies, not every possible pair. "
+            "A dependency means understanding the prerequisite significantly helps grasp the "
+            "dependent concept. If there are no clear dependencies, output nothing.\n\n"
+            "Output format (one per line, nothing else):\n"
+            "vector search ← embeddings\n"
+            "transformer ← attention\n"
+        )
+        response = client.chat.completions.create(
+            model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.0,
+        )
+        text = response.choices[0].message.content or ""
+    except Exception:
+        return 0  # silent failure — dependencies are best-effort
+
+    created = 0
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if "←" not in line and "<-" not in line:
+            continue
+        # Normalise both arrow styles.
+        parts = line.replace("<-", "←").split("←")
+        if len(parts) != 2:
+            continue
+        concept = parts[0].strip().lower()
+        prerequisite = parts[1].strip().lower()
+        if not concept or not prerequisite or concept == prerequisite:
+            continue
+        # Verify both names appear in the original concept list.
+        known = {c.get("name", "").strip().lower() for c in concepts}
+        if concept not in known or prerequisite not in known:
+            continue
+        try:
+            concept_graph.link_prerequisite(concept, prerequisite, source_paper)
+            created += 1
+        except Exception:
+            continue
+
+    return created
+
+
 def ingest_paper(file_name: str) -> dict[str, Any]:
     """Read one paper from papers/ and save metadata, concepts, notes, and cited passages."""
     _ensure_dirs()
@@ -698,6 +764,13 @@ def ingest_paper(file_name: str) -> dict[str, Any]:
     except Exception:
         pass  # graph linking is best-effort; never block ingest
 
+    # --- concept graph: infer prerequisite hints among extracted concepts ---
+    prereq_count = 0
+    try:
+        prereq_count = _infer_dependencies(notes["concepts"], path.name)
+    except Exception:
+        pass  # dependency inference is best-effort
+
     return {
         "status": "ok",
         "source": path.name,
@@ -706,6 +779,7 @@ def ingest_paper(file_name: str) -> dict[str, Any]:
         "concept_count": len(notes["concepts"]),
         "passage_count": len(passages),
         "page_count": len(pages),
+        "prerequisite_edges_created": prereq_count,
     }
 
 
@@ -1260,7 +1334,12 @@ def _next_concept(
     user_interests: list[str],
     last_was_weak: bool,
 ) -> dict[str, Any]:
-    """Pick the next concept to teach using alternating weak/interest strategy."""
+    """Pick the next concept to teach using alternating weak/interest strategy.
+
+    Prerequisite hints (concept-graph dependencies) get a one-hop priority
+    boost: if a candidate concept has an unmet prerequisite, that prerequisite
+    is favoured instead.  The boost is advisory, never blocking.
+    """
     concepts = progress.get("concepts", {})
     weak: list[dict[str, Any]] = []
     strong: list[dict[str, Any]] = []
@@ -1275,6 +1354,38 @@ def _next_concept(
             strong.append(entry)
 
     weak.sort(key=lambda e: e.get("times_correct", 0) / max(e.get("times_asked", 1), 1))
+
+    # --- Prerequisite priority boost (one-hop) ---
+    # For every candidate concept (weak first, then strong), check whether it
+    # has unmet prerequisites.  If an unmet prerequisite exists and is also
+    # a known concept (in tutor progress), boost its position in the weak
+    # list.  If the prerequisite has never been taught, offer it as a new
+    # concept to introduce.
+    try:
+        for candidate_list in (weak, strong):
+            for entry in candidate_list:
+                concept_key = entry["_key"]
+                for prereq_key in concept_graph.get_prerequisites(concept_key):
+                    # Already mastered? Skip.
+                    prereq_entry = concepts.get(prereq_key)
+                    if prereq_entry:
+                        asked_p = max(prereq_entry.get("times_asked", 0), 1)
+                        ratio_p = prereq_entry.get("times_correct", 0) / asked_p
+                        if ratio_p >= 0.8:
+                            continue  # mastered — no boost needed
+                        # Boost: move this prerequisite to the front of the weak list.
+                        prereq_entry["_key"] = prereq_key
+                        if prereq_entry not in weak:
+                            weak.insert(0, prereq_entry)
+                    else:
+                        # Prerequisite concept exists in the dependency graph
+                        # but hasn't been taught at all — introduce it.
+                        return {
+                            "concept": prereq_key,
+                            "reason": "prerequisite for '{}' — never taught yet".format(concept_key),
+                        }
+    except Exception:
+        pass  # best-effort; fall back to default ordering
 
     if not last_was_weak and weak:
         target = weak[0]

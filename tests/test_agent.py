@@ -235,3 +235,98 @@ class TestSetUserPreference:
 
         result = set_user_preference("nonexistent", "value")
         assert result["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# Tutor _next_concept tests (including prerequisite priority boost)
+# ---------------------------------------------------------------------------
+
+
+class TestNextConcept:
+    def test_picks_weakest_first(self):
+        from research_paper_agent.agent import _next_concept
+
+        progress = {
+            "concepts": {
+                "embeddings": {"concept": "embeddings", "times_asked": 3, "times_correct": 2},
+                "vector search": {"concept": "vector search", "times_asked": 3, "times_correct": 0},
+            }
+        }
+        result = _next_concept(progress, ["research agents"], last_was_weak=False)
+        assert result["concept"] == "vector search"  # 0/3 = weakest
+
+    def test_alternates_to_strong(self):
+        from research_paper_agent.agent import _next_concept
+
+        progress = {
+            "concepts": {
+                "embeddings": {"concept": "embeddings", "times_asked": 3, "times_correct": 2},
+                "vector search": {"concept": "vector search", "times_asked": 3, "times_correct": 0},
+            }
+        }
+        result = _next_concept(progress, ["research agents"], last_was_weak=True)
+        # last was weak, so should pick strong
+        assert result["concept"] == "embeddings"
+
+    def test_falls_back_to_interest(self):
+        from research_paper_agent.agent import _next_concept
+
+        progress = {"concepts": {}}
+        result = _next_concept(progress, ["research agents"], last_was_weak=False)
+        assert result["concept"] == "research agents"
+
+    def test_prerequisite_boost_unmet(self):
+        """When a candidate has an unmet prereq, boost the prereq to front."""
+        from research_paper_agent.agent import _next_concept
+        from research_paper_agent import concept_graph
+
+        # Set up a dependency: vector search requires embeddings.
+        concept_graph.link_prerequisite("vector search", "embeddings", "test.pdf")
+
+        # Both are in progress, but embeddings is weaker — vector search
+        # is the candidate. The boost should bring embeddings to the front.
+        progress = {
+            "concepts": {
+                "embeddings": {"concept": "embeddings", "times_asked": 3, "times_correct": 0},
+                "vector search": {"concept": "vector search", "times_asked": 3, "times_correct": 1},
+            }
+        }
+        result = _next_concept(progress, ["research agents"], last_was_weak=False)
+        # embeddings is the prereq of vector search; both are weak,
+        # but embeddings gets boosted to the front of the weak list.
+        assert result["concept"] == "embeddings"
+
+    def test_prerequisite_never_taught_introduced(self):
+        """When a concept's prereq has never been taught, introduce it."""
+        from research_paper_agent.agent import _next_concept
+        from research_paper_agent import concept_graph
+
+        # Set up dependency but only the dependent concept has progress.
+        concept_graph.link_prerequisite("vector search", "embeddings", "test.pdf")
+
+        progress = {
+            "concepts": {
+                "vector search": {"concept": "vector search", "times_asked": 3, "times_correct": 0},
+            }
+        }
+        result = _next_concept(progress, ["research agents"], last_was_weak=False)
+        # embeddings is a prereq of vector search and has never been taught.
+        assert result["concept"] == "embeddings"
+        assert "never taught" in result["reason"]
+
+    def test_prerequisite_already_mastered_no_boost(self):
+        """When a prereq is already mastered (≥80%), no boost occurs."""
+        from research_paper_agent.agent import _next_concept
+        from research_paper_agent import concept_graph
+
+        concept_graph.link_prerequisite("vector search", "embeddings", "test.pdf")
+
+        progress = {
+            "concepts": {
+                "embeddings": {"concept": "embeddings", "times_asked": 5, "times_correct": 5},
+                "vector search": {"concept": "vector search", "times_asked": 3, "times_correct": 0},
+            }
+        }
+        result = _next_concept(progress, ["research agents"], last_was_weak=False)
+        # embeddings is mastered (100%), so vector search is the weakest.
+        assert result["concept"] == "vector search"

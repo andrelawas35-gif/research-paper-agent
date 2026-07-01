@@ -34,7 +34,7 @@ def _now_iso() -> str:
 
 
 def _default_graph() -> dict[str, Any]:
-    return {"schema_version": 1, "edges": {}}
+    return {"schema_version": 2, "edges": {}, "dependencies": {}}
 
 
 def _tokens(text: str) -> set[str]:
@@ -293,11 +293,83 @@ def token_overlap(interest: str, concept: str, min_shared: int = 1) -> bool:
     return len(_tokens(interest) & _tokens(concept)) >= min_shared
 
 
+# ---------------------------------------------------------------------------
+# Prerequisite hints — soft concept→concept edges for curriculum sequencing
+# ---------------------------------------------------------------------------
+
+
+def link_prerequisite(
+    concept: str,
+    prerequisite: str,
+    source_paper: str,
+) -> dict[str, Any]:
+    """Record a soft pedagogical hint: *prerequisite* should be taught before *concept*.
+
+    These are advisory, not blocking.  The tutor uses them as a priority-boost
+    signal, never as a hard gate.  Cycles are safe because only one hop is
+    ever inspected at a time.
+
+    Parameters
+    ----------
+    concept:
+        The concept that depends on the prerequisite (e.g. "vector search").
+    prerequisite:
+        The concept that should come first (e.g. "embeddings").
+    source_paper:
+        The paper filename this relationship was inferred from.
+
+    Returns
+    -------
+    The updated prerequisite record.
+    """
+    graph = load()
+    concept_key = concept.strip().lower()
+    prereq_key = prerequisite.strip().lower()
+
+    if not concept_key or not prereq_key or concept_key == prereq_key:
+        return {"status": "skipped", "reason": "empty or self-referential prerequisite"}
+
+    graph.setdefault("dependencies", {})
+    graph["dependencies"].setdefault(concept_key, {})
+
+    edge = graph["dependencies"][concept_key].get(prereq_key)
+    now = _now_iso()
+
+    if edge is None:
+        edge = {
+            "concept": concept_key,
+            "prerequisite": prereq_key,
+            "source_papers": [source_paper],
+            "created_at": now,
+        }
+    else:
+        if source_paper not in edge.setdefault("source_papers", []):
+            edge["source_papers"].append(source_paper)
+
+    graph["dependencies"][concept_key][prereq_key] = edge
+    _save(graph)
+    return edge
+
+
+def get_prerequisites(concept: str) -> list[str]:
+    """Return the prerequisite concept keys for *concept* (one-hop lookahead).
+
+    Returns an empty list when the concept has no recorded prerequisites or
+    when the concept is unknown to the dependency graph.
+    """
+    graph = load()
+    deps = graph.get("dependencies", {})
+    concept_key = concept.strip().lower()
+    prereq_map = deps.get(concept_key, {})
+    return sorted(prereq_map.keys())
+
+
 def get_concept_graph() -> dict[str, Any]:
     """Inspect the local concept graph (interest-to-concept edges with weights)."""
     decay()
     graph = load()
     edges = graph.get("edges", {})
+    deps = graph.get("dependencies", {})
     summary = []
     for interest_key, concept_edges in sorted(edges.items()):
         for concept_key, edge in sorted(concept_edges.items()):
@@ -312,8 +384,19 @@ def get_concept_graph() -> dict[str, Any]:
                 }
             )
 
+    dep_summary = []
+    for concept_key, prereqs in sorted(deps.items()):
+        for prereq_key, edge in sorted(prereqs.items()):
+            dep_summary.append({
+                "concept": concept_key,
+                "prerequisite": prereq_key,
+                "source_papers": edge.get("source_papers", []),
+            })
+
     return {
         "graph_path": str(CONCEPT_GRAPH_PATH),
         "edge_count": len(summary),
         "edges": summary,
+        "dependency_count": len(dep_summary),
+        "dependencies": dep_summary,
     }

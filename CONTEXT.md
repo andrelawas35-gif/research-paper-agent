@@ -100,6 +100,10 @@ A local bipartite graph connecting User Interests to Paper Concepts, stored in `
 
 A directed connection from a User Interest to a Paper Concept. Three edge types exist: **ingest** (passive keyword match created when a paper is ingested — never decays, weak signal), **engaged** (created or incremented when the user answers a grill question about the concept — decays after 30 days without re-engagement, drops to zero after 60), and **saved** (created when the user explicitly says to remember something — never decays, strongest signal).
 
+## Prerequisite Hint
+
+A soft pedagogical dependency between two Paper Concepts, stored in the Concept Graph's `dependencies` section. A **requires-before** relationship: "embeddings" should be taught before "vector search." Inferred by LLM at paper ingest time. The Tutor Mode uses prerequisite hints as a one-hop priority boost when selecting the next concept — the hint is advisory, never blocking. The user can override at any time by naming a concept directly. Cycles are harmless because only one hop is ever inspected.
+
 ## Concept Match
 
 The agent's annotation of a paper concept with an interest-match label (high/medium/low) derived from the Concept Graph. Used in paper briefs to signal relevance to the user's stated interests.

@@ -188,3 +188,84 @@ class TestGetConceptGraph:
         assert summary["edge_count"] == 1
         assert summary["edges"][0]["interest"] == "research agents"
         assert summary["edges"][0]["type"] == "saved"
+
+    def test_includes_dependencies(self):
+        from research_paper_agent.concept_graph import link_prerequisite, get_concept_graph
+
+        link_prerequisite("vector search", "embeddings", "paper_a.pdf")
+        summary = get_concept_graph()
+        assert summary["dependency_count"] == 1
+        assert summary["dependencies"][0]["concept"] == "vector search"
+        assert summary["dependencies"][0]["prerequisite"] == "embeddings"
+
+
+# ---------------------------------------------------------------------------
+# Prerequisite hint tests
+# ---------------------------------------------------------------------------
+
+
+class TestLinkPrerequisite:
+    def test_creates_prerequisite_edge(self):
+        from research_paper_agent.concept_graph import link_prerequisite, load
+
+        result = link_prerequisite("vector search", "embeddings", "paper_a.pdf")
+        assert result["concept"] == "vector search"
+        assert result["prerequisite"] == "embeddings"
+        graph = load()
+        assert "vector search" in graph["dependencies"]
+        assert "embeddings" in graph["dependencies"]["vector search"]
+
+    def test_skips_self_reference(self):
+        from research_paper_agent.concept_graph import link_prerequisite
+
+        result = link_prerequisite("embeddings", "embeddings", "paper_a.pdf")
+        assert result.get("status") == "skipped"
+
+    def test_skips_empty_concept(self):
+        from research_paper_agent.concept_graph import link_prerequisite
+
+        result = link_prerequisite("", "embeddings", "paper_a.pdf")
+        assert result.get("status") == "skipped"
+
+    def test_appends_second_source_paper(self):
+        from research_paper_agent.concept_graph import link_prerequisite
+
+        link_prerequisite("vector search", "embeddings", "paper_a.pdf")
+        result = link_prerequisite("vector search", "embeddings", "paper_b.pdf")
+        assert result["source_papers"] == ["paper_a.pdf", "paper_b.pdf"]
+
+    def test_multiple_prerequisites_per_concept(self):
+        from research_paper_agent.concept_graph import link_prerequisite, load
+
+        link_prerequisite("transformer", "attention", "paper_a.pdf")
+        link_prerequisite("transformer", "neural networks", "paper_a.pdf")
+        graph = load()
+        deps = graph["dependencies"]["transformer"]
+        assert "attention" in deps
+        assert "neural networks" in deps
+
+
+class TestGetPrerequisites:
+    def test_returns_list(self):
+        from research_paper_agent.concept_graph import link_prerequisite, get_prerequisites
+
+        link_prerequisite("vector search", "embeddings", "paper_a.pdf")
+        link_prerequisite("vector search", "nearest neighbor", "paper_a.pdf")
+        prereqs = get_prerequisites("vector search")
+        assert "embeddings" in prereqs
+        assert "nearest neighbor" in prereqs
+
+    def test_empty_for_unknown_concept(self):
+        from research_paper_agent.concept_graph import get_prerequisites
+
+        assert get_prerequisites("nonexistent") == []
+
+    def test_empty_when_no_dependencies_exist(self):
+        from research_paper_agent.concept_graph import get_prerequisites, load
+
+        # ensure fresh state
+        graph = load()
+        graph.pop("dependencies", None)
+        from research_paper_agent.concept_graph import _save
+        _save(graph)
+        assert get_prerequisites("anything") == []
