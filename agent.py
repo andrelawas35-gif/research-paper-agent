@@ -1390,10 +1390,33 @@ def record_tutor_answer(
     except Exception:
         pass
 
-    # Suggest the next concept.
-    user_interests = [item.get("name", "") for item in _load_user_profile().get("interests", [])]
+    # Mastery → graph feedback: mastered concepts get deprioritised in the graph.
     asked = max(entry.get("times_asked", 1), 1)
     ratio = entry.get("times_correct", 0) / asked
+    try:
+        graph = concept_graph.load()
+        edges = graph.get("edges", {})
+        if ratio >= 0.8:
+            # Mastered — reduce edge weight to floor so rank() deprioritises.
+            for interest_key in list(edges):
+                edge = edges[interest_key].get(key)
+                if edge is not None:
+                    edge["weight"] = round(max(0.1, edge.get("weight", 1.0) * 0.3), 2)
+                    edge["mastered"] = True
+        elif ratio < 0.5:
+            # Weak — boost edge weight so this concept stays visible in rankings.
+            for interest_key in list(edges):
+                edge = edges[interest_key].get(key)
+                if edge is not None and not edge.get("mastered"):
+                    edge["weight"] = round(edge.get("weight", 1.0) + 0.5, 2)
+        concept_graph._save(graph)
+    except Exception:
+        pass
+    # Invalidate concept_graph cache so next load picks up the mastery-adjusted weights.
+    concept_graph._graph_cache = graph
+
+    # Suggest the next concept.
+    user_interests = [item.get("name", "") for item in _load_user_profile().get("interests", [])]
     last_was_weak = ratio < 0.5
     next_concept = _next_concept(progress, user_interests, last_was_weak)
 
