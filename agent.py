@@ -132,13 +132,58 @@ def _read_pdf_pages(path: Path) -> list[dict[str, Any]]:
 
     reader = PdfReader(str(path))
     pages = []
+    ocr_attempted = False  # lazy init — only import OCR deps if needed
+
     for index, page in enumerate(reader.pages, start=1):
         try:
             text = page.extract_text() or ""
-            if text.strip():
-                pages.append({"page": index, "text": text})
         except Exception:
-            continue  # skip corrupt pages
+            text = ""
+
+        # OCR fallback: when pypdf returns no text, try Tesseract on a
+        # rendered page image.  This handles scanned/image-based PDFs.
+        if not text.strip():
+            if not ocr_attempted:
+                try:
+                    import fitz  # PyMuPDF — self-contained PDF renderer
+                    import pytesseract
+                    from PIL import Image  # noqa: F401 — validates Pillow is present
+
+                    # Point pytesseract at the Tesseract OCR engine.
+                    _TESSERACT_PATHS = [
+                        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+                    ]
+                    for tp in _TESSERACT_PATHS:
+                        if Path(tp).exists():
+                            pytesseract.pytesseract.tesseract_cmd = tp
+                            break
+
+                    ocr_attempted = True
+                    _ocr_available = True
+                except ImportError:
+                    _ocr_available = False
+                    ocr_attempted = True
+                except Exception:
+                    _ocr_available = False
+                    ocr_attempted = True
+
+            if _ocr_available:
+                try:
+                    doc = fitz.open(str(path))
+                    page_obj = doc.load_page(index - 1)  # fitz is 0-indexed
+                    pix = page_obj.get_pixmap(dpi=300)
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    text = pytesseract.image_to_string(img)
+                    doc.close()
+                except Exception:
+                    pass  # OCR failed for this page — skip it
+
+            if not text.strip():
+                continue  # nothing extractable from this page
+
+        pages.append({"page": index, "text": text})
+
     return pages
 
 
