@@ -4,6 +4,98 @@
 
 A local Google ADK agent that reads papers, extracts grounded concepts, answers questions with citations, and adapts to the user's recurring research interests and communication style.
 
+## Person
+
+The central object in Relationship Management. A Person represents someone the user knows or wants to track, and acts as the anchor for interactions, relationship notes, commitments, reminders, context, and follow-up history.
+
+## Person Record
+
+The canonical structured representation of a Person in the relationship store. The first Person Record includes stable identity, display name, aliases, relationship type, Relationship Context notes, interaction history, open loops, important dates, tags, Concepts, timestamps, and soft-delete state.
+
+## Relationship Event
+
+An append-only event in the Relationship Store that records how a Person Record changed, such as person_created, context_note_added, interaction_logged, open_loop_added, open_loop_closed, cadence_set, or important_date_added. Relationship Events provide auditability and can be folded into the current Person summary.
+
+## Relationship Correction
+
+An explicit user action that fixes Relationship Management state, such as changing a Relationship Type, separating two people with the same name, removing a context note, closing an open loop, marking context sensitive, or forgetting a Person. Relationship Corrections preserve prior events while marking derived facts as corrected, superseded, rejected, or soft-deleted.
+
+## Derived Person Summary
+
+The current readable state of a Person Record produced from Relationship Events. A Derived Person Summary supports fast lookup while preserving the underlying event history for correction and audit.
+
+## Relationship Management
+
+The agent's local process for remembering people, understanding relationship context, tracking interactions, and helping the user follow up intentionally. Relationship Management belongs inside the main agent as a separate module because it shares Personal Notes, the Concept Graph, reminders, and the User Model.
+
+## Relationship Personalization Boundary
+
+The rule that Relationship Management data may lightly influence relationship-specific recommendations, reminders, and drafting boundaries, but should not broadly infer the user's identity, personality, or explanation style from other people's private context.
+
+## Relationship Context
+
+Private, reflective knowledge about a Person, such as communication style, important life context, shared interests, trust history, boundaries, and what tends to make the relationship better or worse. Relationship Context can personalize recommendations, but it is not an instruction to take action.
+
+## Sensitive Relationship Context
+
+Relationship Context involving health, finances, trauma, conflict, dating, family issues, legal trouble, workplace problems, or similarly private details. Sensitive Relationship Context can be stored after explicit capture, but should be omitted or softened in casual summaries unless the user directly asks for full context.
+
+## Save-First Relationship Extraction
+
+The rule that explicit relationship notes are saved as raw Relationship Events before the agent extracts provisional context, open loops, important dates, Concepts, sensitivity labels, or follow-up angles. The raw relationship note remains the source of truth, and extracted structure is correctable.
+
+## Relationship Operations
+
+Actionable relationship state attached to a Person, such as last interaction, next follow-up, promised actions, reminders, outreach drafts, and open loops. Relationship Operations require stricter auditability and confirmation than Relationship Context because they can lead to external actions.
+
+## Hard Relationship Reminder
+
+A date-based Relationship Operation that should surface at a specific time, usually tied to a concrete promise, deadline, event, or follow-up.
+
+## Soft Relationship Cadence
+
+A relationship-health preference describing how often the user wants to reconnect with a Person or group of people. Soft Relationship Cadence informs Reconnection Recommendations but is not a deadline.
+
+## Reconnection Recommendation
+
+A Relationship Management recommendation that suggests who the user should reconnect with and why. It is based on last interaction, open loops, Relationship Context, Person Concept Links, linked Personal Notes, and Recommendation Confidence.
+
+## Reconnection Recommendation Record
+
+The structured output of recommend_reconnections. It includes person identity, Relationship Type, a short action recommendation, reasons from the Relationship Store, Relationship State Labels, Recommendation Confidence, whether drafting is allowed, and an optional suggested angle without generating a message by default.
+
+## Intentional Reconnection
+
+The goal of Reconnection Recommendations: helping the user care for the right relationships at the right time, not maximizing contact volume or networking throughput. Intentional Reconnection prioritizes open loops, promises, cadence, important dates, shared concepts, and tact around sensitive context.
+
+## Relationship State Label
+
+An explainable non-numeric status used for relationship recommendations, such as needs_follow_up, has_open_loop, cadence_due, recently_connected, dormant, or sensitive_context. Relationship State Labels avoid fake precision while keeping recommendations auditable.
+
+## Relationship Draft Boundary
+
+The rule that the agent may draft outreach for professional, collaboration, or networking relationships when it fits the context, but should avoid drafting intimate personal messages. For personal relationships, the agent can suggest context, reminders, or angles while leaving the actual wording to the user.
+
+## Relationship Type
+
+A user-set classification on a Person Record, such as friend, family, collaborator, mentor, prospect, community, professional, networking, or unknown. The agent may suggest a Relationship Type, but should not silently change it because Relationship Type controls drafting, reminders, privacy, and action boundaries.
+
+## Relationship Store
+
+The canonical local store for Person Records, Relationship Context, interaction history, open loops, important dates, and optional links to Personal Notes. The Relationship Store is separate from the Notes Store because relationship data has more sensitive retrieval, visibility, and deletion rules.
+
+## Explicit Person Capture
+
+The rule that a Person record is created only when the user explicitly asks to add or remember a person. The agent may suggest a possible Person from a relationship note, but ordinary chat should not silently create durable people records.
+
+## Person Disambiguation
+
+The rule that ambiguous names or aliases must be resolved before changing Relationship Management state. When multiple Person Records match, the agent should ask using brief context snippets rather than auto-merging or choosing the strongest match.
+
+## Mobile Relationship Surface
+
+The Discord/mobile-facing Relationship Management surface for capture and lookup commands such as adding a Person, saving a relationship note, logging an interaction, asking who to reconnect with, or inspecting what is known about a Person. Proactive notifications and external sending are excluded from the first mobile surface.
+
 ## Paper
 
 A source document placed in `papers/` for ingestion. Supported forms are `.txt`, `.md`, and optionally `.pdf`.
@@ -59,6 +151,10 @@ A relationship surfaced because two items share one or more Concepts in the Conc
 ## Typed Concept Source
 
 A provenance record in the Concept Graph that separates Papers, Personal Notes, and Note Cards as different source types for a Concept. Typed Concept Sources prevent note IDs from being stored as paper references and keep graph relationships auditable.
+
+## Person Concept Link
+
+A weak typed relationship between a Person and a Concept, used for relationship retrieval and context surfacing. Person Concept Links are not paper evidence, not automatic User Interests, and not proof of the Person's preferences unless the Relationship Context explicitly says so.
 
 ## Personalized Recommendation
 
@@ -212,13 +308,33 @@ A note tag inferred by the agent from a Personal Note or Note Card. Suggested Ta
 
 The initial tool set for working with Personal Notes: save a note, search notes, list notes by tag or concept, and inspect one note by ID. Broader graph exploration and backlink workflows should build on this surface before becoming separate tools.
 
+## Relationship Management Surface
+
+The initial tool set for working with Relationship Management: add_person, list_people, get_person, search_people, add_relationship_note, log_relationship_interaction, recommend_reconnections, and forget_person. The surface includes soft deletion from the first slice because relationship data is sensitive.
+
 ## Personal Notes Module
 
 The implementation boundary for Personal Note storage, extraction, Markdown rendering, search, correction, deletion, and Concept Graph integration. The agent exposes Personal Notes through thin tool wrappers rather than placing the full notes workflow inside the main agent file.
 
+## Relationship Management Module
+
+The implementation boundary for Relationship Management storage, Relationship Events, Derived Person Summaries, search, reconnection recommendations, corrections, and future reminder integration. The agent exposes Relationship Management through thin tool wrappers rather than creating a separate ADK agent or placing the full workflow inside the main agent file.
+
 ## Notes Vertical Slice
 
 An incremental implementation step that delivers a usable part of Personal Notes end to end, such as capture/search, extraction, Markdown mirrors, graph integration, answer synthesis, question ranking, or correction workflows.
+
+## Relationship Vertical Slice
+
+An incremental implementation step that delivers a usable part of Relationship Management end to end, such as person capture, relationship note logging, interaction history, reconnection recommendations, correction workflows, concept links, mobile lookup, or reminders.
+
+## First Relationship Slice
+
+The initial Relationship Vertical Slice focused on local Person capture, listing, inspection, lexical search, relationship notes, interaction logging, and Reconnection Recommendations. It intentionally excludes Discord-specific code, proactive notifications, message sending, Markdown mirrors, and model-based extraction.
+
+## Relationship Markdown Mirror
+
+A future human-readable Markdown representation of a Person Record, intended for browsing, portability, and Obsidian-like relationship review. Relationship Markdown Mirrors are excluded from the First Relationship Slice because the core value is capture, lookup, and reconnection behavior.
 
 ## First Notes Slice
 
