@@ -33,7 +33,11 @@ def _isolate_paths(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(agent, "GRILL_LOG_PATH", um / "adaptive_grill_sessions.jsonl")
     monkeypatch.setattr(agent, "CANDIDATE_SIGNALS_PATH", um / "candidate_signals.jsonl")
     monkeypatch.setattr(agent, "CONCEPT_GRAPH_PATH", um / "concept_graph.json")
+    monkeypatch.setattr(agent, "TUTOR_PROGRESS_PATH", um / "tutor_progress.json")
+    monkeypatch.setattr(agent, "TUTOR_SESSIONS_PATH", um / "tutor_sessions.jsonl")
     monkeypatch.setattr(agent, "PERSONAL_NOTES_PATH", um / "personal_notes.jsonl")
+    monkeypatch.setattr(agent, "PEOPLE_PATH", um / "people.jsonl")
+    monkeypatch.setattr(agent, "SESSION_META_PATH", um / "session_meta.jsonl")
 
     monkeypatch.setattr(concept_graph, "_USER_MODEL_DIR", um)
     monkeypatch.setattr(concept_graph, "CONCEPT_GRAPH_PATH", um / "concept_graph.json")

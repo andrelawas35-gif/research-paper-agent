@@ -8,10 +8,41 @@ integration comes later.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
+
+logger = logging.getLogger(__name__)
+
+
+# ── ADR 0056: Record schemas ─────────────────────────────────────────
+
+
+class NoteCard(TypedDict, total=False):
+    card_id: str
+    text: str
+    concepts: list[str]
+    rejected: bool
+    confidence: float
+
+
+class PersonalNote(TypedDict, total=False):
+    schema_version: int
+    note_id: str
+    title: str
+    text: str
+    created_at: str
+    updated_at: str
+    deleted_at: str | None
+    user_tags: list[str]
+    suggested_tags: list[str]
+    cards: list[NoteCard]
+    concepts: list[str]
+    candidate_signals: list[dict[str, Any]]
+    markdown_path: str | None
+    versions: list[dict[str, Any]]
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -391,8 +422,24 @@ def _extract_cards(text: str, concepts: list[str], limit: int = 5) -> list[dict[
     return cards
 
 
+def _validate_note(record: dict[str, Any]) -> bool:
+    """Return True if the record has all required PersonalNote fields with correct types."""
+    required_str = ["note_id", "title", "text", "created_at", "updated_at"]
+    for key in required_str:
+        if not isinstance(record.get(key), str):
+            logger.warning("PersonalNote missing or invalid field: %s", key)
+            return False
+    if not isinstance(record.get("user_tags"), list):
+        return False
+    if not isinstance(record.get("concepts"), list):
+        return False
+    if not isinstance(record.get("cards"), list):
+        return False
+    return True
+
+
 def load_notes(path: Path | None = None, include_deleted: bool = False) -> list[dict[str, Any]]:
-    """Load personal notes from JSONL, skipping unreadable lines."""
+    """Load personal notes from JSONL, skipping unreadable or invalid lines."""
     notes_path = _note_store_path(path)
     if not notes_path.exists():
         return []
@@ -406,6 +453,10 @@ def load_notes(path: Path | None = None, include_deleted: bool = False) -> list[
             try:
                 note = json.loads(line)
             except json.JSONDecodeError:
+                logger.warning("Skipping unparseable line in %s", notes_path)
+                continue
+            if not _validate_note(note):
+                logger.warning("Skipping invalid note record: %s", note.get("note_id", "unknown"))
                 continue
             if include_deleted or not note.get("deleted_at"):
                 notes.append(note)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -10,11 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from google.adk.agents.llm_agent import Agent
+
+logger = logging.getLogger(__name__)
 from google.adk.labs.openai import OpenAILlm
 from openai import AsyncOpenAI
 from openai import OpenAI
 
-from . import concept_graph, personal_notes
+from . import concept_graph, personal_notes, relationship_management
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -29,6 +32,13 @@ CONCEPT_GRAPH_PATH = USER_MODEL_DIR / "concept_graph.json"
 TUTOR_PROGRESS_PATH = USER_MODEL_DIR / "tutor_progress.json"
 TUTOR_SESSIONS_PATH = USER_MODEL_DIR / "tutor_sessions.jsonl"
 PERSONAL_NOTES_PATH = USER_MODEL_DIR / "personal_notes.jsonl"
+PEOPLE_PATH = USER_MODEL_DIR / "people.jsonl"
+SESSION_META_PATH = USER_MODEL_DIR / "session_meta.jsonl"
+
+# Inter-request throttle: Semantic Scholar allows ~1 req/s without an API key.
+# Each call to _search_semantic_scholar drains the token bucket before sending.
+_SCHOLAR_LAST_REQUEST: float = 0.0
+_SCHOLAR_MIN_INTERVAL: float = 1.2  # seconds between requests (little margin above 1.0)
 
 
 STOPWORDS = {
@@ -333,6 +343,71 @@ def _paper_record_path(paper_path: Path) -> Path:
     return KNOWLEDGE_DIR / f"{safe_name}.json"
 
 
+def _normalize_evidence_scopes(value: str | list[str] | tuple[str, ...] | None = None) -> list[str]:
+    """Normalize user/tool supplied evidence scope labels."""
+    if value is None:
+        raw_items: list[str] = []
+    elif isinstance(value, str):
+        raw_items = re.split(r"[,;\s]+", value)
+    else:
+        raw_items = [str(item) for item in value]
+
+    scopes: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        normalized = item.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        scopes.append(normalized)
+    return scopes
+
+
+def _infer_evidence_scopes(file_name: str) -> list[str]:
+    """Suggest scopes from import location/name; stored metadata remains canonical."""
+    parts = [part.lower() for part in Path(file_name).parts]
+    joined = " ".join(parts)
+    scopes: list[str] = []
+    if "simon" in joined:
+        scopes.append("mentor:simon")
+    if "lanier" in joined or "jaron" in joined:
+        scopes.append("mentor:lanier")
+    return scopes
+
+
+def _record_evidence_scopes(record: dict[str, Any]) -> set[str]:
+    """Return canonical scope labels stored on a knowledge-base record."""
+    scopes = set(_normalize_evidence_scopes(record.get("evidence_scope")))
+
+    metadata = record.get("metadata", {})
+    if isinstance(metadata, dict):
+        scopes.update(_normalize_evidence_scopes(metadata.get("evidence_scope")))
+        collection = str(metadata.get("collection", "")).strip().lower()
+        mentor = str(metadata.get("mentor", "")).strip().lower()
+        if collection:
+            scopes.add(collection)
+        if collection == "mentor" and mentor:
+            scopes.add(f"mentor:{mentor}")
+
+    collection = str(record.get("collection", "")).strip().lower()
+    mentor = str(record.get("mentor", "")).strip().lower()
+    if collection:
+        scopes.add(collection)
+    if collection == "mentor" and mentor:
+        scopes.add(f"mentor:{mentor}")
+    return scopes
+
+
+def _filter_records_by_scope(
+    records: list[dict[str, Any]],
+    evidence_scope: str | list[str] | tuple[str, ...] | None = None,
+) -> list[dict[str, Any]]:
+    scopes = set(_normalize_evidence_scopes(evidence_scope))
+    if not scopes:
+        return records
+    return [record for record in records if scopes.intersection(_record_evidence_scopes(record))]
+
+
 def _load_records() -> list[dict[str, Any]]:
     """Load ingested paper records, cached in memory after first read."""
     cache = getattr(_load_records, "_cache", None)
@@ -380,6 +455,17 @@ def _score_passage(query_terms: list[str], passage: dict[str, Any], document_cou
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _parse_iso_datetime(value: str, field_name: str, errors: list[str]) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        errors.append(f"{field_name} must be an ISO 8601 timestamp")
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _default_user_profile() -> dict[str, Any]:
@@ -462,7 +548,25 @@ def _default_user_profile() -> dict[str, Any]:
                 "confidence": 0.7,
             }
         ],
+        "polish_preferences": {
+            "default": "moderate",
+        },
     }
+
+
+def _validate_profile(profile: dict[str, Any]) -> bool:
+    """Return True if the profile has all required top-level fields."""
+    if not isinstance(profile.get("schema_version"), int):
+        return False
+    if not isinstance(profile.get("interests"), list):
+        return False
+    if not isinstance(profile.get("style_preferences"), list):
+        return False
+    if not isinstance(profile.get("adaptation_rules"), list):
+        return False
+    if not isinstance(profile.get("avoidances"), list):
+        return False
+    return True
 
 
 def _load_user_profile() -> dict[str, Any]:
@@ -476,15 +580,20 @@ def _load_user_profile() -> dict[str, Any]:
         USER_PROFILE_PATH.write_text(json.dumps(profile, indent=2), encoding="utf-8")
         return profile
     try:
-        return json.loads(USER_PROFILE_PATH.read_text(encoding="utf-8"))
+        profile = json.loads(USER_PROFILE_PATH.read_text(encoding="utf-8"))
+        if not _validate_profile(profile):
+            logger.warning("Profile failed validation, restoring defaults")
+            profile = _default_user_profile()
+            profile["recovery_note"] = "profile.json failed validation and defaults were restored."
+            USER_PROFILE_PATH.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+        _load_user_profile._cache = profile  # type: ignore[attr-defined]
+        return profile
     except json.JSONDecodeError:
         profile = _default_user_profile()
         profile["recovery_note"] = "profile.json was unreadable and defaults were restored."
         USER_PROFILE_PATH.write_text(json.dumps(profile, indent=2), encoding="utf-8")
         _load_user_profile._cache = profile  # type: ignore[attr-defined]
         return profile
-    _load_user_profile._cache = profile  # type: ignore[attr-defined]
-    return profile
 
 
 def _save_user_profile(profile: dict[str, Any]) -> None:
@@ -993,7 +1102,7 @@ def _infer_dependencies(concepts: list[dict[str, Any]], source_paper: str) -> in
     return created
 
 
-def ingest_paper(file_name: str) -> dict[str, Any]:
+def ingest_paper(file_name: str, evidence_scope: str = "") -> dict[str, Any]:
     """Read one paper from papers/ and save metadata, concepts, notes, and cited passages."""
     _ensure_dirs()
     path = (PAPERS_DIR / file_name).resolve()
@@ -1007,6 +1116,7 @@ def ingest_paper(file_name: str) -> dict[str, Any]:
 
     passages = _make_passages(path.name, pages)
     notes = _extract_candidate_notes(text, passages)
+    scopes = _normalize_evidence_scopes(evidence_scope) or _infer_evidence_scopes(file_name)
     record = {
         "schema_version": 2,
         "metadata": _extract_metadata(path.name, pages),
@@ -1017,6 +1127,8 @@ def ingest_paper(file_name: str) -> dict[str, Any]:
         "notes": notes,
         "passages": passages,
     }
+    if scopes:
+        record["evidence_scope"] = scopes
     output_path = _paper_record_path(path)
     output_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
 
@@ -1090,13 +1202,13 @@ def list_concepts() -> dict[str, Any]:
     }
 
 
-def search_evidence(query: str, max_passages: int = 8) -> dict[str, Any]:
+def search_evidence(query: str, max_passages: int = 8, evidence_scope: str = "") -> dict[str, Any]:
     """Search ingested evidence passages with weighted lexical ranking and citations."""
     query_terms = _tokenize(query)
     if not query_terms:
-        return {"query": query, "matches": []}
+        return {"query": query, "evidence_scope": evidence_scope or None, "matches": []}
 
-    records = _load_records()
+    records = _filter_records_by_scope(_load_records(), evidence_scope)
     passages = _all_passages(records)
     doc_freq: Counter = Counter()
     for passage in passages:
@@ -1118,7 +1230,11 @@ def search_evidence(query: str, max_passages: int = 8) -> dict[str, Any]:
             )
 
     matches.sort(key=lambda item: item["score"], reverse=True)
-    return {"query": query, "matches": matches[:max(1, min(max_passages, 20))]}
+    return {
+        "query": query,
+        "evidence_scope": evidence_scope or None,
+        "matches": matches[:max(1, min(max_passages, 20))],
+    }
 
 
 def paper_brief(source: str = "") -> dict[str, Any]:
@@ -1287,6 +1403,78 @@ def record_interaction(
     return {"status": "ok", "log_path": str(INTERACTION_LOG_PATH), "event": event}
 
 
+# ── ADR 0067: Session metadata for cognitive adaptation ──────────────
+
+
+def _write_session_meta(
+    message_count: int,
+    inferred_goal: str = "",
+    topic_stability: float = 1.0,
+    completion_status: str = "ended_naturally",
+    question_depth: str = "stable",
+    started_at: str = "",
+    ended_at: str = "",
+) -> dict[str, Any]:
+    """Write a lightweight session summary to session_meta.jsonl."""
+    _ensure_dirs()
+    errors: list[str] = []
+
+    try:
+        message_count_int = int(message_count)
+    except (TypeError, ValueError):
+        message_count_int = 0
+        errors.append("message_count must be an integer")
+    if message_count_int < 0:
+        errors.append("message_count must be non-negative")
+
+    try:
+        topic_stability_float = float(topic_stability)
+    except (TypeError, ValueError):
+        topic_stability_float = -1.0
+        errors.append("topic_stability must be a number")
+    if not 0.0 <= topic_stability_float <= 1.0:
+        errors.append("topic_stability must be between 0.0 and 1.0")
+
+    allowed_statuses = {"ended_naturally", "abandoned", "timeout"}
+    if completion_status not in allowed_statuses:
+        errors.append(
+            "completion_status must be one of: "
+            + ", ".join(sorted(allowed_statuses))
+        )
+
+    allowed_depth = {"deepening", "shallowing", "stable"}
+    if question_depth not in allowed_depth:
+        errors.append(
+            "question_depth must be one of: "
+            + ", ".join(sorted(allowed_depth))
+        )
+
+    ended_at_value = ended_at or _now_iso()
+    if not started_at:
+        errors.append("started_at must be provided by runtime session state")
+    started_dt = _parse_iso_datetime(started_at, "started_at", errors) if started_at else None
+    ended_dt = _parse_iso_datetime(ended_at_value, "ended_at", errors)
+    if started_dt is not None and ended_dt is not None and started_dt > ended_dt:
+        errors.append("started_at must be before or equal to ended_at")
+
+    if errors:
+        return {"status": "error", "message": "; ".join(errors)}
+
+    meta = {
+        "session_id": f"sess_{started_at[:10].replace('-', '')}_{message_count_int:03d}",
+        "started_at": started_at,
+        "ended_at": ended_at_value,
+        "message_count": message_count_int,
+        "inferred_goal": inferred_goal or "general exploration",
+        "topic_stability": round(topic_stability_float, 2),
+        "completion_status": completion_status,
+        "question_depth_trajectory": question_depth,
+    }
+    with SESSION_META_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(meta) + "\n")
+    return {"status": "ok", "session_id": meta["session_id"]}
+
+
 def set_user_preference(category: str, value: str, evidence: str = "", confidence: float = 0.9) -> dict[str, Any]:
     """Add an explicit user preference or correction to the local user model."""
     allowed = {
@@ -1334,13 +1522,16 @@ def save_personal_note(
     or when the user directly asks to store a personal/knowledge-management
     note. Do not use this for ordinary unmarked chat.
     """
-    return personal_notes.save_note(
+    result = personal_notes.save_note(
         text=text,
         title=title,
         user_tags=user_tags,
         concepts=concepts,
         path=PERSONAL_NOTES_PATH,
     )
+    if result.get("status") == "ok":
+        return _projection_status(result, "personal_note", result.get("note_id", ""))
+    return result
 
 
 def list_personal_notes() -> dict[str, Any]:
@@ -1389,6 +1580,7 @@ def edit_personal_note(
             concept_graph.refresh_note_signal(note_id)
         except Exception:
             pass
+        return _projection_status(result, "personal_note", note_id)
     return result
 
 
@@ -1422,6 +1614,105 @@ def render_note_markdown(note_id: str) -> dict[str, Any]:
 def import_markdown_notes() -> dict[str, Any]:
     """Sync Markdown mirror edits back into the canonical JSONL store."""
     return personal_notes.import_markdown_notes(path=PERSONAL_NOTES_PATH)
+
+
+# ── ADR 0056–0058: Relationship Management first slice ────────────────
+
+
+def add_person(
+    display_name: str,
+    relationship_type: str = "unknown",
+    aliases: str = "",
+    context_note: str = "",
+    tags: str = "",
+    concepts: str = "",
+    cadence_days: int | None = None,
+) -> dict[str, Any]:
+    """Create a Person record through explicit relationship capture."""
+    return relationship_management.add_person(
+        display_name=display_name,
+        relationship_type=relationship_type,
+        aliases=aliases,
+        context_note=context_note,
+        tags=tags,
+        concepts=concepts,
+        cadence_days=cadence_days,
+        path=PEOPLE_PATH,
+    )
+
+
+def list_people() -> dict[str, Any]:
+    """List non-deleted people with summary metadata."""
+    return relationship_management.list_people(path=PEOPLE_PATH)
+
+
+def get_person(person_id_or_name: str) -> dict[str, Any]:
+    """Return one Person record by id, display name, or alias."""
+    return relationship_management.get_person(person_id_or_name, path=PEOPLE_PATH)
+
+
+def search_people(query: str, max_people: int = 10) -> dict[str, Any]:
+    """Search people by name, aliases, relationship context, interactions, tags, and concepts."""
+    return relationship_management.search_people(
+        query=query,
+        max_people=max_people,
+        path=PEOPLE_PATH,
+    )
+
+
+def add_relationship_note(
+    person_id_or_name: str,
+    text: str,
+    concepts: str = "",
+    tags: str = "",
+    linked_note_ids: str = "",
+    open_loop: str = "",
+    sensitive: bool | None = None,
+) -> dict[str, Any]:
+    """Save explicit Relationship Context for a Person."""
+    return relationship_management.add_relationship_note(
+        person_id_or_name=person_id_or_name,
+        text=text,
+        concepts=concepts,
+        tags=tags,
+        linked_note_ids=linked_note_ids,
+        open_loop=open_loop,
+        sensitive=sensitive,
+        path=PEOPLE_PATH,
+    )
+
+
+def log_relationship_interaction(
+    person_id_or_name: str,
+    summary: str,
+    happened_at: str = "",
+    channel: str = "",
+    concepts: str = "",
+    open_loop: str = "",
+) -> dict[str, Any]:
+    """Log an interaction with a Person."""
+    return relationship_management.log_relationship_interaction(
+        person_id_or_name=person_id_or_name,
+        summary=summary,
+        happened_at=happened_at,
+        channel=channel,
+        concepts=concepts,
+        open_loop=open_loop,
+        path=PEOPLE_PATH,
+    )
+
+
+def recommend_reconnections(max_people: int = 5) -> dict[str, Any]:
+    """Recommend who to reconnect with and why."""
+    return relationship_management.recommend_reconnections(
+        max_people=max_people,
+        path=PEOPLE_PATH,
+    )
+
+
+def forget_person(person_id_or_name: str) -> dict[str, Any]:
+    """Soft-delete a Person record from normal relationship retrieval."""
+    return relationship_management.forget_person(person_id_or_name, path=PEOPLE_PATH)
 
 
 # ── ADR 0013: Session goal inference ────────────────────────────────────
@@ -1517,6 +1808,300 @@ def _knowledge_loop_update(source: str, payload: dict[str, Any]) -> dict[str, An
         "routed_to": routed,
         "timestamp": now,
     }
+
+
+# ── ADR 0061-0064: Projection plumbing ───────────────────────────────
+
+
+def _emit_projection_update(
+    source_type: str,
+    source_id: str,
+    context: str = "",
+) -> dict[str, Any]:
+    """Best-effort typed projection update after a canonical write.
+
+    Adds typed source references to concept graph edges when the write
+    involves concepts.  Failure here does not fail the canonical write
+    (ADR 0063: best-effort, synchronous, not blocking).
+    """
+    try:
+        profile = _load_user_profile()
+        concepts: list[str] = []
+        if source_type == "personal_note":
+            note_result = personal_notes.get_note(source_id, path=PERSONAL_NOTES_PATH)
+            if note_result.get("status") == "ok":
+                concepts = note_result["note"].get("concepts", [])
+        elif source_type == "tutor_progress":
+            progress = _load_tutor_progress()
+            entry = progress.get("concepts", {}).get(source_id.strip().lower(), {})
+            concepts = [entry.get("concept", source_id)] if entry else [source_id]
+        elif source_type == "grill_answer":
+            concepts = [context[:80]] if context else []
+
+        updated = 0
+        for concept_name in concepts:
+            for interest in profile.get("interests", []):
+                interest_name = interest.get("name", "")
+                if not interest_name:
+                    continue
+                try:
+                    concept_graph.link(
+                        interest_name, concept_name, source_id,
+                        edge_type="note" if source_type == "personal_note" else "engaged",
+                    )
+                    updated += 1
+                except Exception:
+                    pass
+        return {"status": "ok", "updated_edges": updated}
+    except Exception as exc:
+        return {"status": "skipped", "reason": str(exc)[:200], "updated_edges": 0}
+
+
+def _projection_status(result: dict[str, Any], source_type: str, source_id: str, context: str = "") -> dict[str, Any]:
+    """Attach projection_status to a tool result dict."""
+    proj = _emit_projection_update(source_type, source_id, context)
+    result["projection_status"] = proj
+    return result
+
+
+# ── ADR 0071: Web search tool (Semantic Scholar + DuckDuckGo) ─────────
+
+
+def _classify_source_quality(url: str) -> str:
+    """Classify a URL into a source quality tag."""
+    domain = url.lower()
+    if any(d in domain for d in ["arxiv.org", "semanticscholar.org", "scholar.google", "acm.org", "ieee.org", "springer.com", "nature.com", "science.org", "pubmed", "doi.org"]):
+        return "peer-reviewed"
+    if any(d in domain for d in ["python.org", "docs.python", "mdn.", "devdocs.io", "readthedocs.io", "docs.rs", "pkg.go.dev"]):
+        return "official-docs"
+    if any(d in domain for d in ["github.com", "gitlab.com"]):
+        return "vendor"
+    if any(d in domain for d in ["stackoverflow.com", "stackexchange.com", "reddit.com", "discourse", "news.ycombinator.com"]):
+        return "forum"
+    if any(d in domain for d in [".blog", "medium.com", "dev.to", "substack.com"]):
+        return "technical-blog"
+    return "unknown"
+
+
+def _search_semantic_scholar(query: str, limit: int = 5) -> dict[str, Any]:
+    """Search Semantic Scholar API for academic papers. Free, no key required.
+
+    Enforces inter-request throttling (~1 req/s) and uses Retry-After headers
+    when rate-limited.  Without an API key the public endpoint allows roughly
+    1 request per second; this module-level throttle prevents the LLM from
+    firing rapid-fire calls that would all 429.
+    """
+    import time
+    import urllib.request
+    import urllib.parse
+    import urllib.error
+
+    global _SCHOLAR_LAST_REQUEST
+
+    # ── inter-request throttle ──────────────────────────────────────────
+    now = time.monotonic()
+    gap = now - _SCHOLAR_LAST_REQUEST
+    if gap < _SCHOLAR_MIN_INTERVAL:
+        time.sleep(_SCHOLAR_MIN_INTERVAL - gap)
+
+    encoded = urllib.parse.quote(query)
+    url = (
+        f"https://api.semanticscholar.org/graph/v1/paper/search"
+        f"?query={encoded}&limit={limit}"
+        f"&fields=title,authors,year,abstract,citationCount,url,externalIds"
+    )
+
+    for attempt in range(4):
+        _SCHOLAR_LAST_REQUEST = time.monotonic()  # stamp before send
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "ResearchPaperAgent/1.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < 3:
+                # Prefer the Retry-After header; fall back to exponential.
+                retry_after = exc.headers.get("Retry-After") if hasattr(exc, "headers") else None
+                if retry_after is not None:
+                    try:
+                        wait = float(retry_after)
+                    except ValueError:
+                        wait = 2 ** (attempt + 1)
+                else:
+                    wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                # Add jitter so concurrent callers don't sync up.
+                wait += time.monotonic() % 1.0
+                logger.warning(
+                    "Semantic Scholar 429 (attempt %d/4), waiting %.1fs",
+                    attempt + 1, wait,
+                )
+                time.sleep(wait)
+                continue
+            return {
+                "status": "error", "backend": "semantic_scholar",
+                "message": f"HTTP {exc.code} — Semantic Scholar returned an error",
+            }
+        except Exception as exc:
+            return {
+                "status": "error", "backend": "semantic_scholar",
+                "message": str(exc)[:300],
+            }
+
+    papers = data.get("data", [])
+    results = []
+    for paper in papers:
+        authors = [a.get("name", "") for a in paper.get("authors", [])]
+        ext_ids = paper.get("externalIds", {})
+        paper_url = paper.get("url") or (
+            f"https://doi.org/{ext_ids.get('DOI')}" if ext_ids.get("DOI") else ""
+        )
+        results.append({
+            "title": paper.get("title", "Unknown"),
+            "authors": authors[:5],
+            "year": paper.get("year"),
+            "abstract": (paper.get("abstract") or "")[:600],
+            "citations": paper.get("citationCount", 0),
+            "url": paper_url,
+            "source_quality": "peer-reviewed",
+            "provenance": f"[cited: paper, via Semantic Scholar] — {paper.get('title', 'Unknown')[:120]}",
+        })
+    return {
+        "status": "ok",
+        "backend": "semantic_scholar",
+        "query": query,
+        "total_results": data.get("total", len(results)),
+        "results": results,
+    }
+
+
+def _search_duckduckgo(query: str, limit: int = 5) -> dict[str, Any]:
+    """Search DuckDuckGo using the ddgs package (HTML scraping).
+
+    The api.duckduckgo.com instant-answer API returns empty results or
+    dictionary definitions for many queries.  The ``ddgs`` package scrapes
+    the actual DuckDuckGo HTML search results page.
+
+    Falls back to the instant-answer API if ddgs is not installed or fails.
+    """
+    try:
+        from ddgs import DDGS  # duckduckgo_search was renamed to ddgs
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS  # legacy package name
+        except ImportError:
+            return _search_duckduckgo_fallback(query, limit)
+
+    results = []
+    try:
+        with DDGS() as ddgs:
+            for result in ddgs.text(query, max_results=limit):
+                href = result.get("href", "")
+                # Filter out dictionary definitions, disambiguation pages.
+                if any(skip in href.lower() for skip in ["/definition/", "duckduckgo.com/?q="]):
+                    continue
+                results.append({
+                    "title": (result.get("title") or "")[:200],
+                    "abstract": (result.get("body") or "")[:600],
+                    "url": href,
+                    "source_quality": _classify_source_quality(href),
+                    "provenance": f"[from web: {href[:80]}] — {(result.get('title') or '')[:120]}",
+                })
+    except Exception:
+        return _search_duckduckgo_fallback(query, limit)
+
+    if not results:
+        return _search_duckduckgo_fallback(query, limit)
+
+    return {
+        "status": "ok",
+        "backend": "duckduckgo",
+        "query": query,
+        "total_results": len(results),
+        "results": results[:limit],
+    }
+
+
+def _search_duckduckgo_fallback(query: str, limit: int = 5) -> dict[str, Any]:
+    """Fallback: DuckDuckGo instant answers API (limited, often returns empty)."""
+    import urllib.request
+    import urllib.parse
+
+    encoded = urllib.parse.quote(query)
+    url = f"https://api.duckduckgo.com/?q={encoded}&format=json&no_html=1&skip_disambig=1"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ResearchPaperAgent/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as exc:
+        return {"status": "error", "backend": "duckduckgo", "message": str(exc)[:300]}
+
+    results = []
+    abstract = (data.get("AbstractText") or "").strip()
+    if abstract:
+        results.append({
+            "title": data.get("Heading", "Instant Answer"),
+            "abstract": abstract[:800],
+            "url": data.get("AbstractURL", ""),
+            "source_quality": _classify_source_quality(data.get("AbstractURL", "")),
+            "provenance": f"[from web: duckduckgo.com] — {data.get('Heading', 'Instant Answer')[:120]}",
+        })
+    for topic in data.get("RelatedTopics", [])[:limit - len(results)]:
+        text = (topic.get("Text") or "").strip()
+        url = topic.get("FirstURL", "")
+        if text and url:
+            results.append({
+                "title": text.split(" - ")[0][:120] if " - " in text else text[:120],
+                "abstract": text[:600],
+                "url": url,
+                "source_quality": _classify_source_quality(url),
+                "provenance": f"[from web: {url.split('/')[2] if '//' in url else 'duckduckgo.com'}] — {text[:120]}",
+            })
+    return {
+        "status": "ok",
+        "backend": "duckduckgo_fallback",
+        "query": query,
+        "total_results": len(results),
+        "results": results[:limit],
+    }
+
+
+def search_web(query: str, source: str = "auto") -> dict[str, Any]:
+    """Search the web for information, with dual backends for scholarly and general queries.
+
+    Args:
+        query: The search query (will be used as-is; the LLM should rewrite before calling).
+        source: "scholar" for academic papers (Semantic Scholar), "web" for general
+                (DuckDuckGo), or "auto" to let the tool decide based on query signals.
+
+    Returns structured results with provenance tags, source_quality classification,
+    and URLs for citation. Web-sourced claims should be capped at Medium confidence.
+    """
+    query = query.strip()
+    if not query:
+        return {"status": "error", "message": "search query is required"}
+
+    if source == "auto":
+        # Heuristic: academic signals → scholar, otherwise → web.
+        academic_signals = [
+            "paper", "research", "study", "method", "finding", "abstract",
+            "doi", "arxiv", "et al", "experiment", "baseline", "benchmark",
+            "peer review", "citation", "conference", "journal",
+        ]
+        lower = query.lower()
+        if any(sig in lower for sig in academic_signals):
+            source = "scholar"
+        else:
+            source = "web"
+
+    if source == "scholar":
+        return _search_semantic_scholar(query)
+    return _search_duckduckgo(query)
 
 
 def knowledge_self_audit() -> dict[str, Any]:
@@ -2033,7 +2618,7 @@ def respond_to_adaptive_grill(question_id: str, user_answer: str, question_text:
             )
         )
 
-    return {
+    result = {
         "status": "ok",
         "candidate_signals_path": str(CANDIDATE_SIGNALS_PATH),
         "candidate_signals": candidate_signals,
@@ -2045,6 +2630,7 @@ def respond_to_adaptive_grill(question_id: str, user_answer: str, question_text:
             "adaptive_grill again with a narrower topic if the answer revealed a new direction."
         ),
     }
+    return _projection_status(result, "grill_answer", question_id, question_text)
 
 
 # ---------------------------------------------------------------------------
@@ -2287,7 +2873,7 @@ def record_tutor_answer(
     last_was_weak = ratio < 0.5
     next_concept = _next_concept(progress, user_interests, last_was_weak)
 
-    return {
+    result = {
         "status": "ok",
         "concept": concept,
         "correct": correct,
@@ -2298,6 +2884,7 @@ def record_tutor_answer(
         "suggested_next_concept": next_concept,
         "sessions_log_path": str(TUTOR_SESSIONS_PATH),
     }
+    return _projection_status(result, "tutor_progress", concept)
 
 
 def get_tutor_progress() -> dict[str, Any]:
@@ -2344,120 +2931,394 @@ def _safe_tool(fn):
     return _wrapper
 
 
+# ── Smart context header ───────────────────────────────────────────────
+# ADR 0069: Inject a compact snapshot of durable state into the system
+# instruction on every turn so the agent stays sharp without needing to
+# remember to call profile/notes/graph tools.  Target: ≤ 500 tokens.
+#
+# The snapshot is cache-stabilized: it only rebuilds when the underlying
+# state actually changes (profile edits, note saves, concept updates).
+# This prevents the LLM provider's context cache from being invalidated
+# on every turn by a trivially-different instruction string.
+
+_SNAPSHOT_CACHE: tuple[str, str] = ("", "")  # (state_hash, snapshot_text)
+
+
+def _state_fingerprint() -> str:
+    """Return a short hash of all durable state that feeds the snapshot.
+
+    When this hash changes, the snapshot is rebuilt.  When it stays the
+    same, the cached snapshot is reused — keeping the instruction
+    identical across turns and preserving the LLM context cache.
+    """
+    import hashlib
+    h = hashlib.sha1()
+    try:
+        h.update(USER_PROFILE_PATH.read_bytes())
+    except Exception:
+        pass
+    try:
+        h.update(CONCEPT_GRAPH_PATH.read_bytes())
+    except Exception:
+        pass
+    try:
+        h.update(PERSONAL_NOTES_PATH.read_bytes())
+    except Exception:
+        pass
+    try:
+        h.update(TUTOR_PROGRESS_PATH.read_bytes())
+    except Exception:
+        pass
+    return h.hexdigest()[:16]
+
+
+def _build_snapshot(ctx: Any | None = None) -> str:
+    """Build a compact context header from durable state.
+
+    Called once per turn by the dynamic instruction provider.  The header
+    gives the LLM a low-latency summary of who the user is, what they're
+    working on, and what the agent knows — without requiring tool calls.
+    """
+    profile = _load_user_profile()
+
+    parts: list[str] = ["[context snapshot]"]
+
+    # ── who ─────────────────────────────────────────────────────────
+    interests = [i.get("name", "") for i in profile.get("interests", [])[:5]]
+    style = [s.get("preference", "") for s in profile.get("style_preferences", [])[:3]]
+    polish = profile.get("polish_preferences", {})
+    polish_default = polish.get("default", "moderate") if isinstance(polish, dict) else "moderate"
+    avoidances = [a.get("rule", "") for a in profile.get("avoidances", [])[:2]]
+    quirks = [q.get("observation", "") for q in profile.get("grammar_and_quirks", [])[:2]]
+
+    who_lines = []
+    if interests:
+        who_lines.append(f"interests: {', '.join(interests)}")
+    if style:
+        who_lines.append(f"style: {', '.join(style)}")
+    who_lines.append(f"polish: {polish_default}")
+    if avoidances:
+        who_lines.append(f"avoid: {', '.join(avoidances)}")
+    if quirks:
+        who_lines.append(f"quirks: {', '.join(quirks)}")
+    parts.append("user: " + "; ".join(who_lines))
+
+    # ── what ────────────────────────────────────────────────────────
+    # Recent personal notes (last 5, titles + top concepts only).
+    try:
+        notes = personal_notes.load_notes()
+        active = [n for n in notes if not n.get("deleted") and n.get("title")]
+        active.sort(key=lambda n: n.get("updated_at", n.get("created_at", "")), reverse=True)
+        recent = active[:5]
+        if recent:
+            note_lines = []
+            for n in recent:
+                title = n.get("title", "")[:60]
+                concepts = [c.get("name", "") for c in n.get("concepts", [])[:3]]
+                label = f"{title}"
+                if concepts:
+                    label += f" [{', '.join(concepts)}]"
+                note_lines.append(label)
+            parts.append("recent notes: " + " | ".join(note_lines))
+    except Exception:
+        pass  # notes unavailable — skip
+
+    # ── graph ───────────────────────────────────────────────────────
+    try:
+        g = concept_graph.load()
+        edges = g.get("edges", [])
+        # Top concepts by edge count.
+        edge_count: dict[str, int] = {}
+        for e in edges:
+            c = e.get("concept", "")
+            if c:
+                edge_count[c] = edge_count.get(c, 0) + 1
+        top = sorted(edge_count.items(), key=lambda x: -x[1])[:5]
+        if top:
+            parts.append("top concepts: " + ", ".join(f"{c}({n})" for c, n in top))
+    except Exception:
+        pass
+
+    # ── tutor ───────────────────────────────────────────────────────
+    try:
+        tp = json.loads(TUTOR_PROGRESS_PATH.read_text()) if TUTOR_PROGRESS_PATH.exists() else {}
+        weak = [c for c, s in tp.get("mastery", {}).items() if s < 0.5]
+        if weak:
+            parts.append(f"weak concepts: {', '.join(weak[:5])}")
+    except Exception:
+        pass
+
+    # ── session context (re-anchor) ─────────────────────────────────
+    try:
+        if SESSION_META_PATH.exists():
+            lines = SESSION_META_PATH.read_text().strip().splitlines()
+            if lines:
+                last = json.loads(lines[-1])
+                goal = last.get("inferred_goal", "")
+                status = last.get("completion_status", "")
+                if goal and status != "ended_naturally":
+                    parts.append(
+                        f"prior session: {goal} (unfinished, msg count {last.get('message_count', '?')})"
+                    )
+    except Exception:
+        pass
+
+    return "\n".join(parts)
+
+
+# The static instruction body (extracted from the old inline string so
+# it can be combined with the dynamic snapshot header).
+_STATIC_INSTRUCTION = (
+    "You are a Personal Knowledge Manager: grounded, adaptive, privacy-aware, "
+    "and focused on the user's current session goal. Use the active Agent Mode "
+    "to choose posture; Mentor Mode is one mode among many, not the default "
+    "identity of the whole agent. "
+    "For factual answers, call search_evidence and cite the returned citation "
+    "fields. Use paper_brief for summaries, compare_papers for cross-paper "
+    "synthesis, and make_study_guide for learning workflows. "
+    "Use rename_paper, delete_paper, and organize_papers to manage the papers/ "
+    "directory. rename_paper atomically migrates file, knowledge-base record, "
+    "and concept-graph edges. delete_paper defaults to dry-run preview; only "
+    "execute when the user confirms. organize_papers accepts a mapping of "
+    "{old_name: new_name} and runs each rename independently. "
+    "Use save_personal_note only for explicit note capture prompts such as "
+    "'note:', 'save note:', 'remember note:', or direct requests to store a "
+    "personal knowledge-management note. Do not save ordinary unmarked chat "
+    "as a note. Use list_personal_notes, get_personal_note, and "
+    "search_personal_notes when the user asks about their notes. Treat personal "
+    "notes as the user's knowledge/context, not as source-backed paper evidence. "
+    "Use Relationship Management tools only for explicit relationship prompts "
+    "such as 'add person:', 'relationship note:', 'log interaction', or direct "
+    "requests to remember someone. Do not silently create Person records from "
+    "ordinary chat. Use add_person, list_people, get_person, search_people, "
+    "add_relationship_note, log_relationship_interaction, recommend_reconnections, "
+    "and forget_person for relationship memory. Relationship data is sensitive: "
+    "when summaries contain Sensitive Relationship Context, soften or omit it "
+    "unless the user directly asks for full context. For professional, networking, "
+    "or collaboration relationships you may draft outreach when asked; for "
+    "personal or intimate relationships, suggest context or an angle and leave "
+    "the wording to the user. Never send messages externally. "
+    "Edit notes with edit_personal_note, reject incorrect cards with "
+    "reject_note_card, and remove misleading concepts with reject_note_concept. "
+    "Use get_note_backlinks to discover notes that share concepts — the backlinks "
+    "are derived from the Concept Graph, not manual wiki-links. "
+    "When answering with both papers and personal notes, separate your output "
+    "into three labeled lanes: **Evidence** (cited paper passages), "
+    "**Your Notes** (relevant personal notes and cards), and **Inference** "
+    "(your synthesis, clearly labeled as inferential). "
+    "Adapt across three separate dimensions per concept: content_selection "
+    "(what to show), explanation_style (how to explain), and challenge_level "
+    "(difficulty of questions). A user may want concise answers about one "
+    "topic but deeper scaffolding on another — do not use one global setting. "
+    "Separate source-backed "
+    "claims from your own inference. Before giving a personalized recommendation "
+    "from a paper, establish at least one cited source-backed claim first; label "
+    "brainstorming or extrapolation as inference. Exercise research taste: when "
+    "a paper seems low-yield, say whether to skim, study deeply, compare, or "
+    "discard, and justify that recommendation with citations and the user model. "
+    "Follow the user's known interests by default, but include at most one adjacent "
+    "possibility when the text strongly suggests a nearby idea worth considering; "
+    "make it easy for the user to reject that direction. "
+    "Be warm but not deferential: if the user's interpretation exceeds the "
+    "evidence, or their preferred direction conflicts with the paper or their "
+    "stated goals, push back with citations and propose a safer framing. "
+    "For every personalized recommendation, include a Recommendation Confidence "
+    "label: High when directly cited and aligned with user goals, Medium when "
+    "text-supported but interpretive, and Low when speculative, adjacent, or weakly "
+    "supported. Explain the confidence briefly. "
+    "After meaningful paper reading, grilling, synthesis, or recommendation work, "
+    "offer to produce a compact session artifact such as concept cards, decision "
+    "notes, open questions, agent-building ideas, a reading queue, or user-model "
+    "updates. Ask before creating artifacts, but make the offer specific by naming "
+    "the exact artifact shape. "
+    "Support explicit modes when the user names them. Detect the mode from "
+    "the first message and switch posture accordingly — do not wait for "
+    "the user to repeat the mode name. "
+    "Reader Mode means faithful source understanding (also called Source Mode); "
+    "Grill Mode means one pointed adaptive question at a time; "
+    "Builder Mode means Socratic ideation "
+    "and design partnership; Taste Mode means judge skim/study/"
+    "compare/discard; Artifact Mode means create confirmed durable outputs; "
+    "Profile Mode means inspect or update the user model (also called Reflect Mode); "
+    "Tutor Mode means "
+    "teach paper concepts through an explain-then-quiz loop with adaptive "
+    "curriculum. In Tutor Mode, use search_evidence to find a cited passage, "
+    "explain the concept, ask one question via adaptive_grill, then call "
+    "record_tutor_answer to grade the response and suggest the next concept. "
+    "Alternate between drilling weak concepts and exploring high-interest ones; "
+    "let the user steer at any point. "
+    "Builder Mode means Socratic ideation and design partnership. Follow "
+    "a three-phase flow: (1) Clarify — ask one Socratic question about the "
+    "user's goal, shaped by get_user_profile, get_note_backlinks, and recent "
+    "papers. (2) Generate — produce 3–5 ideas with Ideation Provenance tags "
+    "on every component: [from your notes], [cited: source], or [inference]. "
+    "(3) Grill — the user picks an idea; stress-test one component at a "
+    "time across feasibility, trade-offs, assumptions, risks, adjacent "
+    "possibilities from papers/notes, conflicts with stated preferences, and "
+    "knowledge gaps from get_tutor_progress. Ask one pointed question per "
+    "component. Let the user steer depth — stop when they say stop. "
+    "Writing Mode means transform knowledge into prose with attention to "
+    "voice, flow, expression, and audience. By default, apply moderate "
+    "polish to the user's prompts and responses — fix grammar, improve "
+    "clarity, and elevate word choice. Read the user's polish_preferences "
+    "from the profile for per-context settings (chat, technical, creative, "
+    "default). When the user says 'keep my wording,' 'too formal,' or "
+    "'that's not what I meant,' record a Polish Preference correction "
+    "through learn_from_user_message for that context. Polish levels: "
+    "none (exact wording), light (grammar only), moderate (grammar + flow), "
+    "full (significant restructuring). Start proactive and learn to match "
+    "the user's expected level over time. "
+    "Adapt to cognitive diversity by default. Chunk long answers into "
+    "labeled sections and signal structure upfront ('Three things about X'). "
+    "Lead every answer with the most personally relevant insight before "
+    "providing full explanation. Vary pacing based on engagement — rapid-fire "
+    "when the user is locked in, gentle check-ins when quiet. After meaningful "
+    "answers, offer one to three concrete next actions. When resuming after a pause, re-anchor with 'You were "
+    "exploring X. Continue or pivot?' — don't dump a recap. Check comprehension "
+    "before continuing on complex topics. Default to actionable over abstract. "
+    "Session metadata is written by runtime/application code, not by model tool "
+    "calls; use provided session context when adapting pacing or re-anchoring. "
+    "Mentor Mode means think through a mentor's cognitive framework using "
+    "their ingested papers as your reasoning substrate. Simon is the default "
+    "only inside Mentor Mode. In Simon mode, call search_evidence with "
+    "evidence_scope='mentor:simon' before making Simon-derived framework claims, then synthesize through "
+    "frameworks such as satisficing, bounded rationality, design science, and "
+    "means-ends analysis. In Lanier mode, activated by 'Lanier,' 'Jaron,' or a "
+    "clearly requested human-centered critique, call search_evidence with "
+    "evidence_scope='mentor:lanier' before making Lanier-derived framework claims, then synthesize through "
+    "human agency, phenomenological critique, data dignity, and contrarian "
+    "warmth. If the relevant mentor corpus is missing or cannot be isolated "
+    "from the general knowledge base, say so and offer either source ingestion "
+    "or a clearly labeled inspired/inference lens. Speak as the agent applying "
+    "the mentor model, not as Simon or Lanier. In both modes, adapt to the user "
+    "specifically through existing privacy and provenance boundaries: use "
+    "get_user_profile for style_preferences, get_tutor_progress for challenge "
+    "level, and apply cognitive adaptation rules. Use relevant notes, concept "
+    "graph context, and interests naturally, but do not treat Personal Notes as "
+    "mentor-source evidence or pull sensitive relationship context unless it is "
+    "directly relevant and requested. "
+    "When the user asks for an audit of what you've learned about them, call "
+    "knowledge_self_audit to produce the full inspectable view — confirmed "
+    "preferences, candidate signals, concept graph health, tutor mastery, and "
+    "note-derived signals. Present the audit with the correction actions listed "
+    "at the bottom so the user can steer: confirm a signal, reject one, downgrade "
+    "a preference, or suppress a concept. Call self_audit_correction only when "
+    "the user explicitly asks to apply one of those actions. "
+    "Prioritize the current session goal over the long-term user profile; use the "
+    "profile to shape style and suggestions, then include adjacent possibilities "
+    "only after the session goal is served. Infer the session goal by default; "
+    "ask one clarifying question only when ambiguity would materially change the "
+    "output. The agent may propose improvements to itself from research insights, "
+    "but must not claim to modify its own code automatically; code changes require "
+    "explicit user approval and a separate implementation step. "
+    "Treat answers to adaptive grill questions as provisional candidate signals "
+    "unless the user explicitly says to remember them; do not over-promote one "
+    "exploratory answer into a durable preference. "
+    "Use the Concept Graph (get_concept_graph) to rank grill questions by "
+    "user-interest weight and to annotate paper briefs with interest_match "
+    "labels (high/medium/low). When a paper is ingested, concept-graph edges "
+    "are created automatically; grill answers and explicit saves strengthen "
+    "them. "
+    "Use get_user_profile when tailoring tone, "
+    "format, or topic selection. Call learn_from_user_message when a user message "
+    "reveals a new interest, question pattern, communication quirk, or correction. "
+    "Call set_user_preference for explicit preferences. The user prefers direct, "
+    "useful progress, but also wants more lengthy answers shaped around their "
+    "personality for explanations, synthesis, and recommendations. Keep grill "
+    "questions pointed, then give richer reasoning after answers. Do not overfit "
+    "from weak signals. "
+    "When the user wants questioning, grilling, or recommendations, call "
+    "adaptive_grill and ask only its first_question. After the user answers, call "
+    "respond_to_adaptive_grill before giving the next recommendation. "
+    "If papers have not been ingested, ask the user to add files or call "
+    "ingest_all_papers when they ask to read the folder. Before concluding "
+    "nothing is ingested, always check first: call list_concepts or "
+    "paper_brief to see what's already in the knowledge base — papers "
+    "persist across sessions and do not need to be re-ingested. "
+    "When the user edits or interacts with notes, the knowledge loop "
+    "automatically updates graph signals and candidate patterns — you do "
+    "not need to manually route these updates. Use suggest_concept_merges "
+    "to find near-duplicate concepts that could be consolidated, and "
+    "render_note_markdown and import_markdown_notes to sync between the "
+    "canonical JSONL store and Markdown mirrors. "
+    "Use search_web to look up information beyond ingested papers. "
+    "For academic queries (research, papers, methods, findings), use "
+    "source='scholar' which searches Semantic Scholar and returns "
+    "peer-reviewed paper metadata with `[cited: paper, via Semantic Scholar]` "
+    "provenance. For general or how-to queries, use source='web' which "
+    "searches DuckDuckGo and returns web results tagged `[from web: domain.com]` "
+    "with source_quality labels. Web-sourced claims are capped at Medium "
+    "recommendation confidence — web content is not peer-reviewed. Present "
+    "web results in their own lane, distinct from paper Evidence and your "
+    "Personal Notes. "
+    "Support these agent modes, inferred from user intent: Source (understand "
+    "papers faithfully, formerly Reader), Retrieve (search papers/web/notes), "
+    "Synthesis (combine across sources with provenance), Builder (Socratic "
+    "ideation and design), Grill (one adaptive question at a time), Tutor "
+    "(explain-then-quiz loop), Reflect (inspect/update user model, formerly "
+    "Profile), Relationship (manage people and interactions), Taste (judge "
+    "skim/study/compare/discard), Review (audit knowledge state), Writing "
+    "(draft and revise prose), Artifact (create durable outputs), Admin "
+    "(manage files and config), Mentor (guide thinking through Simon's "
+    "design-science lens; invoke 'Lanier' for humanistic perspective). "
+    "Use at most one primary mode plus one "
+    "supporting mode; infer silently by default. "
+    "Keep answers structured, grounded, adaptive, and appropriately detailed."
+)
+
+
+def _dynamic_instruction(ctx: Any) -> str:
+    """Instruction provider: return the context snapshot (only).
+
+    The static instruction body is set via `static_instruction=` so it
+    stays in the cacheable system-instruction slot.  This callable
+    returns only the lightweight snapshot header, and it reuses a cached
+    copy when the underlying state hasn't changed.
+
+    When the session grows long (> 80 events), we append a compaction
+    hint — the event count is intentionally NOT part of the state
+    fingerprint, so the hint appears only when the session is genuinely
+    long, without invalidating the cache on every intermediate turn.
+    """
+    global _SNAPSHOT_CACHE
+
+    fp = _state_fingerprint()
+    cached_fp, cached_text = _SNAPSHOT_CACHE
+    if fp == cached_fp and cached_text:
+        snapshot = cached_text
+    else:
+        try:
+            snapshot = _build_snapshot(ctx)
+        except Exception:
+            snapshot = "[context snapshot unavailable]"
+        _SNAPSHOT_CACHE = (fp, snapshot)
+
+    # Compaction hint: only when the session is genuinely long.  The
+    # event count varies per-turn but the hint text is fixed — it won't
+    # break the cache for most turn pairs.
+    if ctx is not None:
+        try:
+            events = getattr(getattr(ctx, "session", None), "events", [])
+            event_count = len(events) if events else 0
+            if event_count > 80:
+                snapshot += (
+                    "\n[compaction: long session. Be concise. "
+                    "Lead with the most relevant insight. "
+                    "Skip historical recaps. "
+                    "Prefer actionable next steps.]"
+                )
+        except Exception:
+            pass
+
+    return snapshot
+
+
 root_agent = Agent(
     model=DeepSeekLlm(),
     name="research_paper_agent",
     description="Reads research papers, extracts concepts, compares papers, and answers grounded questions.",
-    instruction=(
-        "You are a careful research assistant for papers and a local personalized "
-        "assistant for this user. Use tools before making claims about ingested papers. "
-        "For factual answers, call search_evidence and cite the returned citation "
-        "fields. Use paper_brief for summaries, compare_papers for cross-paper "
-        "synthesis, and make_study_guide for learning workflows. "
-        "Use rename_paper, delete_paper, and organize_papers to manage the papers/ "
-        "directory. rename_paper atomically migrates file, knowledge-base record, "
-        "and concept-graph edges. delete_paper defaults to dry-run preview; only "
-        "execute when the user confirms. organize_papers accepts a mapping of "
-        "{old_name: new_name} and runs each rename independently. "
-        "Use save_personal_note only for explicit note capture prompts such as "
-        "'note:', 'save note:', 'remember note:', or direct requests to store a "
-        "personal knowledge-management note. Do not save ordinary unmarked chat "
-        "as a note. Use list_personal_notes, get_personal_note, and "
-        "search_personal_notes when the user asks about their notes. Treat personal "
-        "notes as the user's knowledge/context, not as source-backed paper evidence. "
-        "Edit notes with edit_personal_note, reject incorrect cards with "
-        "reject_note_card, and remove misleading concepts with reject_note_concept. "
-        "Use get_note_backlinks to discover notes that share concepts — the backlinks "
-        "are derived from the Concept Graph, not manual wiki-links. "
-        "When answering with both papers and personal notes, separate your output "
-        "into three labeled lanes: **Evidence** (cited paper passages), "
-        "**Your Notes** (relevant personal notes and cards), and **Inference** "
-        "(your synthesis, clearly labeled as inferential). "
-        "Adapt across three separate dimensions per concept: content_selection "
-        "(what to show), explanation_style (how to explain), and challenge_level "
-        "(difficulty of questions). A user may want concise answers about one "
-        "topic but deeper scaffolding on another — do not use one global setting. "
-        "Separate source-backed "
-        "claims from your own inference. Before giving a personalized recommendation "
-        "from a paper, establish at least one cited source-backed claim first; label "
-        "brainstorming or extrapolation as inference. Exercise research taste: when "
-        "a paper seems low-yield, say whether to skim, study deeply, compare, or "
-        "discard, and justify that recommendation with citations and the user model. "
-        "Follow the user's known interests by default, but include at most one adjacent "
-        "possibility when the text strongly suggests a nearby idea worth considering; "
-        "make it easy for the user to reject that direction. "
-        "Be warm but not deferential: if the user's interpretation exceeds the "
-        "evidence, or their preferred direction conflicts with the paper or their "
-        "stated goals, push back with citations and propose a safer framing. "
-        "For every personalized recommendation, include a Recommendation Confidence "
-        "label: High when directly cited and aligned with user goals, Medium when "
-        "text-supported but interpretive, and Low when speculative, adjacent, or weakly "
-        "supported. Explain the confidence briefly. "
-        "After meaningful paper reading, grilling, synthesis, or recommendation work, "
-        "offer to produce a compact session artifact such as concept cards, decision "
-        "notes, open questions, agent-building ideas, a reading queue, or user-model "
-        "updates. Ask before creating artifacts, but make the offer specific by naming "
-        "the exact artifact shape. "
-        "Support explicit modes when the user names them. Detect the mode from "
-        "the first message and switch posture accordingly — do not wait for "
-        "the user to repeat the mode name. "
-        "Reader Mode means faithful source understanding; Grill Mode means one "
-        "pointed adaptive question at a time; Builder Mode means turn research "
-        "into agent/tool/workflow ideas; Taste Mode means judge skim/study/"
-        "compare/discard; Artifact Mode means create confirmed durable outputs; "
-        "Profile Mode means inspect or update the user model; Tutor Mode means "
-        "teach paper concepts through an explain-then-quiz loop with adaptive "
-        "curriculum. In Tutor Mode, use search_evidence to find a cited passage, "
-        "explain the concept, ask one question via adaptive_grill, then call "
-        "record_tutor_answer to grade the response and suggest the next concept. "
-        "Alternate between drilling weak concepts and exploring high-interest ones; "
-        "let the user steer at any point. "
-        "When the user asks for an audit of what you've learned about them, call "
-        "knowledge_self_audit to produce the full inspectable view — confirmed "
-        "preferences, candidate signals, concept graph health, tutor mastery, and "
-        "note-derived signals. Present the audit with the correction actions listed "
-        "at the bottom so the user can steer: confirm a signal, reject one, downgrade "
-        "a preference, or suppress a concept. Call self_audit_correction only when "
-        "the user explicitly asks to apply one of those actions. "
-        "Prioritize the current session goal over the long-term user profile; use the "
-        "profile to shape style and suggestions, then include adjacent possibilities "
-        "only after the session goal is served. Infer the session goal by default; "
-        "ask one clarifying question only when ambiguity would materially change the "
-        "output. The agent may propose improvements to itself from research insights, "
-        "but must not claim to modify its own code automatically; code changes require "
-        "explicit user approval and a separate implementation step. "
-        "Treat answers to adaptive grill questions as provisional candidate signals "
-        "unless the user explicitly says to remember them; do not over-promote one "
-        "exploratory answer into a durable preference. "
-        "Use the Concept Graph (get_concept_graph) to rank grill questions by "
-        "user-interest weight and to annotate paper briefs with interest_match "
-        "labels (high/medium/low). When a paper is ingested, concept-graph edges "
-        "are created automatically; grill answers and explicit saves strengthen "
-        "them. "
-        "Use get_user_profile when tailoring tone, "
-        "format, or topic selection. Call learn_from_user_message when a user message "
-        "reveals a new interest, question pattern, communication quirk, or correction. "
-        "Call set_user_preference for explicit preferences. The user prefers direct, "
-        "useful progress, but also wants more lengthy answers shaped around their "
-        "personality for explanations, synthesis, and recommendations. Keep grill "
-        "questions pointed, then give richer reasoning after answers. Do not overfit "
-        "from weak signals. "
-        "When the user wants questioning, grilling, or recommendations, call "
-        "adaptive_grill and ask only its first_question. After the user answers, call "
-        "respond_to_adaptive_grill before giving the next recommendation. "
-        "If papers have not been ingested, ask the user to add files or call "
-        "ingest_all_papers when they ask to read the folder. Before concluding "
-        "nothing is ingested, always check first: call list_concepts or "
-        "paper_brief to see what's already in the knowledge base — papers "
-        "persist across sessions and do not need to be re-ingested. "
-        "When the user edits or interacts with notes, the knowledge loop "
-        "automatically updates graph signals and candidate patterns — you do "
-        "not need to manually route these updates. Use suggest_concept_merges "
-        "to find near-duplicate concepts that could be consolidated, and "
-        "render_note_markdown and import_markdown_notes to sync between the "
-        "canonical JSONL store and Markdown mirrors. "
-        "Keep answers structured, grounded, adaptive, and appropriately detailed."
-    ),
+    static_instruction=_STATIC_INSTRUCTION,
+    instruction=_dynamic_instruction,
     tools=[
         _safe_tool(list_papers),
         _safe_tool(rename_paper),
@@ -2485,6 +3346,15 @@ root_agent = Agent(
         _safe_tool(get_note_backlinks),
         _safe_tool(render_note_markdown),
         _safe_tool(import_markdown_notes),
+        _safe_tool(add_person),
+        _safe_tool(list_people),
+        _safe_tool(get_person),
+        _safe_tool(search_people),
+        _safe_tool(add_relationship_note),
+        _safe_tool(log_relationship_interaction),
+        _safe_tool(recommend_reconnections),
+        _safe_tool(forget_person),
+        _safe_tool(search_web),
         _safe_tool(knowledge_self_audit),
         _safe_tool(self_audit_correction),
         _safe_tool(adaptive_grill),

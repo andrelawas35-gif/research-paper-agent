@@ -1,8 +1,8 @@
 # Context Glossary
 
-## Research Paper Agent
+## Personal Knowledge Manager
 
-A local Google ADK agent that reads papers, extracts grounded concepts, answers questions with citations, and adapts to the user's recurring research interests and communication style.
+A local Google ADK agent that helps the user capture, organize, retrieve, and develop personal knowledge across papers, Personal Notes, relationship context, ideas, tutor progress, and the User Model. Paper reading remains a grounded capability inside the broader Personal Knowledge Manager rather than the product's whole identity.
 
 ## Person
 
@@ -96,13 +96,21 @@ The rule that ambiguous names or aliases must be resolved before changing Relati
 
 The Discord/mobile-facing Relationship Management surface for capture and lookup commands such as adding a Person, saving a relationship note, logging an interaction, asking who to reconnect with, or inspecting what is known about a Person. Proactive notifications and external sending are excluded from the first mobile surface.
 
+## Source
+
+An external document or reference the Personal Knowledge Manager can read for grounded understanding, such as a Paper, doc, PDF, transcript, manual, web page, or email. Sources provide evidence and citations for Source Mode and Synthesis Mode.
+
 ## Paper
 
-A source document placed in `papers/` for ingestion. Supported forms are `.txt`, `.md`, and optionally `.pdf`.
+A Source document placed in `papers/` for ingestion. Supported forms are `.txt`, `.md`, and optionally `.pdf`.
 
 ## Evidence Passage
 
 A short, cited text span extracted from a paper. Evidence passages are the unit used for grounded answers.
+
+## Evidence Scope
+
+An explicit knowledge-base record label that restricts retrieval to a named evidence corpus, such as `mentor:simon` or `mentor:lanier`. Evidence Scopes are stored as record metadata and are the canonical boundary for scoped retrieval.
 
 ## User Model
 
@@ -166,11 +174,11 @@ The agent's source-grounded view of an ingested paper, represented by concepts, 
 
 ## Working Knowledge
 
-Research material transformed into reusable understanding, personal questions, and agent-building ideas the user can act on.
+Captured or sourced material transformed into reusable understanding, personal questions, ideas, decisions, and actions the user can return to.
 
 ## Knowledge Management
 
-The agent's broader local process for capturing, organizing, retrieving, and applying the user's working knowledge across papers, Personal Notes, Interaction Signals, Candidate Signals, the User Model, the Concept Graph, and Tutor Progress.
+The agent's broader local process for capturing, organizing, retrieving, and applying the user's working knowledge across Sources, Personal Notes, Relationship Context, Interaction Signals, Candidate Signals, the User Model, the Concept Graph, and Tutor Progress.
 
 ## Self-Learning Knowledge Loop
 
@@ -210,11 +218,11 @@ The Adaptation Dimension controlling how hard the agent pushes the user, how adv
 
 ## Grounded Transformation
 
-Turning paper evidence into personal recommendations only after the source claim, support, and limitation are understood.
+Turning source evidence into personal recommendations only after the source claim, support, and limitation are understood.
 
 ## Research Taste
 
-The agent's ability to judge whether a paper is worth skimming, deep study, comparison, or discard for the user's current goals.
+The Personal Knowledge Manager's ability to judge whether a source is worth skimming, deep study, comparison, or discard for the user's current goals.
 
 ## Adjacent Possibility
 
@@ -242,7 +250,7 @@ A plain-language label that says how strongly a personalized recommendation is s
 
 ## Session Artifact
 
-A compact durable output from a meaningful research interaction, such as concept cards, decision notes, open questions, agent-building ideas, or a reading queue.
+A compact durable output from a meaningful Personal Knowledge Manager interaction, such as concept cards, decision notes, open questions, Builder Ideas, relationship follow-ups, study prompts, or a reading queue.
 
 ## Personal Note
 
@@ -354,11 +362,71 @@ A specific proposal for a Session Artifact that names the intended shape before 
 
 ## Agent Mode
 
-A named operating posture that tells the agent which research behavior to emphasize, such as reading faithfully, grilling, building, judging taste, producing artifacts, or updating the user profile.
+A named operating posture that tells the Personal Knowledge Manager which job to emphasize, such as capturing, retrieving, sourcing, synthesizing, building ideas, grilling, tutoring, reviewing, writing, producing artifacts, reflecting, managing relationships, or administering the system.
+
+## Mode Stack
+
+The rule that a Personal Knowledge Manager response should have one primary Agent Mode and at most one supporting Agent Mode. Mode Stack allows workflows such as Synthesis supported by Retrieve or Tutor supported by Source without letting many modes compete at once.
+
+## Mode Visibility
+
+The rule that the Personal Knowledge Manager infers modes silently by default and names the active mode only when it helps clarify behavior, resolve ambiguity, or explain a mode switch. Mode Visibility avoids prefixing every response with mode labels.
+
+## Capture Mode
+
+An Agent Mode for quickly saving personal knowledge objects, including Personal Notes, Person Records, Relationship Context, idea fragments, open loops, important dates, and explicit user preferences. Capture Mode optimizes for low-friction explicit capture while preserving later correction.
+
+## Capture Classification
+
+The rule that unmarked conversation is not saved, but once the user invokes Capture Mode with language such as note, idea, add person, relationship note, or remember, the Personal Knowledge Manager may infer the captured object's subtype and return a correction affordance.
+
+## Retrieve Mode
+
+An Agent Mode for finding and connecting existing knowledge across Personal Notes, Papers, People, Concepts, prior decisions, Session Artifacts, and the User Model. Retrieve Mode optimizes for recall, cross-linking, and provenance-aware answers.
+
+## Synthesis Mode
+
+An Agent Mode for making meaning across retrieved knowledge, such as connecting Personal Notes with Papers, comparing user beliefs with literature evidence, finding themes across notes or relationship context, and turning fragments into a coherent theory or interpretation. Synthesis Mode differs from Retrieve Mode because it creates structured understanding rather than only finding relevant material.
+
+## Writing Mode
+
+An Agent Mode for transforming knowledge into prose with attention to voice, flow, expression, and audience. Writing Mode handles essays, reflections, drafted messages, explanations, proposals, narrative summaries, and polished notes, while Artifact Mode handles durable structured outputs.
+
+## Source Mode
+
+An Agent Mode for faithfully understanding external sources such as Papers, docs, PDFs, transcripts, manuals, web pages, or emails with citations, evidence passages, concepts, limitations, and grounded summaries. Source Mode is the evidence-first reading capability inside the broader Personal Knowledge Manager.
+
+## Reader Mode
+
+An alias for Source Mode retained for paper/doc-reading prompts and existing ADR language.
+
+## Reflect Mode
+
+An Agent Mode for inspecting, explaining, and correcting what the Personal Knowledge Manager believes it knows about the user, including confirmed preferences, Candidate Signals, Concept Graph weights, Tutor Progress, Relationship boundaries, User Profile entries, and Knowledge Self-Audit findings. Reflect Mode replaces Profile Mode as a top-level operating posture.
+
+## Relationship Mode
+
+An Agent Mode for managing people, Relationship Context, interaction history, open loops, soft cadence, important dates, and Reconnection Recommendations. Relationship Mode stays top-level because relationship data has special privacy, disambiguation, drafting, retrieval, and personalization boundaries.
+
+## Taste Mode
+
+An Agent Mode for judging whether a knowledge object, source, idea, note, project, workflow, or relationship-management direction deserves attention. Taste Mode can recommend skim, study, build, compare, park, discard, research further, or transform, and should justify the judgment with provenance and user fit.
+
+## Review Mode
+
+An Agent Mode for inspecting an existing artifact, code change, ADR, note, plan, idea, user-model assumption, or recommendation for quality, correctness, risks, gaps, regressions, and missing tests. Review Mode differs from Taste Mode because it evaluates the quality of something already produced rather than whether it deserves attention.
+
+## Grill Mode
+
+An Agent Mode for one-question-at-a-time pressure testing of papers, plans, beliefs, preferences, relationship ideas, learning gaps, or design assumptions. Grill Mode is the broad operating posture; Builder Grill is a specialized technique used inside Builder Mode.
+
+## Admin Mode
+
+An Agent Mode for operational management of the Personal Knowledge Manager, including settings, imports, exports, sync, deletion, purging, backups, health checks, migrations, deployment, secrets, model/backend config, API/mobile surfaces, and storage health.
 
 ## Session Goal
 
-The user's current task or purpose for a research interaction, which takes priority over long-term profile preferences.
+The user's current task or purpose for a Personal Knowledge Manager interaction, which takes priority over long-term profile preferences.
 
 ## Goal Clarification
 
@@ -366,11 +434,35 @@ A single question the agent asks only when the session goal is ambiguous enough 
 
 ## Improvement Proposal
 
-A suggested change to the research agent, supported by evidence and confidence, that requires explicit approval before any code is modified.
+A suggested change to the Personal Knowledge Manager, supported by evidence and confidence, that requires explicit approval before any code is modified.
 
 ## Concept Graph
 
-A local typed graph connecting User Interests, Concepts, Papers, Personal Notes, Note Cards, and prerequisite hints, stored in `user_model/concept_graph.json`. The graph preserves source provenance while letting the user's own notes and ingested papers meet through shared concepts.
+A local typed projection connecting User Interests, Concepts, Papers, Personal Notes, Note Cards, People, Relationship Events, and prerequisite hints. The Concept Graph supports ranking, retrieval, backlinks, questioning, and synthesis, but canonical facts remain owned by their source stores.
+
+## Typed Knowledge Projection
+
+A rebuildable graph view over canonical stores such as the Notes Store, Relationship Store, Knowledge Base, User Model, Tutor Progress, and interaction logs. A Typed Knowledge Projection preserves provenance and cross-domain traversal without becoming the source of truth for notes, people, papers, or preferences.
+
+## Projection Plumbing
+
+The write-side coordination that updates the Typed Knowledge Projection after canonical stores change. Projection Plumbing belongs after canonical writes and before graph inspection, so retrieval and audits reflect notes, tutor answers, grill answers, and relationship events without making those stores depend on the graph.
+
+## Best-Effort Projection Update
+
+A synchronous projection update attempted immediately after a canonical store write succeeds. Best-Effort Projection Updates must not roll back the canonical write when projection refresh fails, but should return or log enough status for later inspection.
+
+## Projection Status
+
+A compact tool-result field that reports whether a Best-Effort Projection Update succeeded, failed, was skipped, or was not applicable. Projection Status keeps stale graph/retrieval behavior inspectable without turning projection failures into canonical write failures.
+
+## Projection Rebuild Path
+
+A future maintenance path that can reconstruct the Typed Knowledge Projection from canonical stores and typed provenance. The Projection Rebuild Path is not required for the first projection slice, but first-slice projection records should preserve enough source type and source ID information to make it possible later.
+
+## Canonical Knowledge Store
+
+The source-of-truth local store for a specific kind of knowledge, such as Personal Notes, Relationship Events, paper records, User Model entries, or Tutor Progress. Canonical Knowledge Stores own correction, deletion, privacy, and migration rules for their records.
 
 ## Graph Edge
 
@@ -406,7 +498,7 @@ A proposed consolidation of similar Concepts that the agent surfaces for user ap
 
 ## Tutor Mode
 
-An Agent Mode where the agent teaches paper concepts through an explain-then-quiz loop, grades free-text answers via LLM, and adapts the curriculum to the user's mastery level. Defaults to alternating between weak-area drilling and interest-aligned exploration, with the user able to steer at any time.
+An Agent Mode where the Personal Knowledge Manager teaches concepts through an explain-then-quiz loop, grades free-text answers, and adapts the curriculum to the user's mastery level. Tutor Mode can draw from Sources, Personal Notes, Concept Graph links, Builder Ideas, and Tutor Progress, while preserving evidence boundaries for factual or source-grounded grading.
 
 ## Tutor Session
 
@@ -427,3 +519,215 @@ The tutor's concept-selection strategy. Alternates between the lowest-mastery co
 ## OCR Fallback
 
 A transparent extraction path in `_read_pdf_pages` that activates when pypdf returns empty text for a page. Renders the page to an image via PyMuPDF (fitz) and runs Tesseract OCR (one system dependency, installed separately). Text-native PDFs are unaffected — the OCR path is never entered for them. Scanned or image-based PDFs are now ingestable as first-class papers.
+
+## Builder Mode
+
+An agent mode for Socratic ideation and design partnership. Builder Mode helps the user formulate loose ideas into more cohesive designs through clarification, structured idea generation, provenance, and component-level grilling. Builder Mode draws from all three knowledge sources: User Model for personalization, ingested papers for grounding, and LLM knowledge for breadth.
+
+## Planning Mode
+
+A possible future Agent Mode for sequencing concrete work into milestones, dependencies, issues, and acceptance criteria. Planning Mode is not top-level initially because Artifact Mode can produce PRDs, issue lists, and build plans until planning becomes frequent enough to deserve its own posture.
+
+## Decision Mode
+
+A possible future Agent Mode for high-stakes option selection and trade-off resolution. Decision Mode is not top-level initially because Builder Mode clarifies options, Taste Mode judges attention, Reflect Mode checks preference conflicts, and Artifact Mode can preserve decision notes or ADRs.
+
+## Briefing Mode
+
+A possible future Agent Mode for on-request or proactive daily/weekly summaries of notes to revisit, open loops, reconnection candidates, queued Sources, weak concepts, stale ideas, and admin warnings. Briefing Mode is deferred until the underlying stores and reminder/cadence behavior are stable.
+
+## Builder Co-Authorship
+
+The rule that Builder Mode treats cohesive ideas as co-authored with the user. The agent may propose structure, names, theses, components, and critiques, but should repeatedly check what feels alive, wrong, worth preserving, or closest to the user's intent.
+
+## Builder Entry Condition
+
+The rule that Builder Mode activates when the user is designing, inventing, comparing, brainstorming, or stress-testing a system, product, workflow, or plan. Builder Mode should not hijack direct implementation, paper-reading, tutoring, or note-capture requests because it is intentionally slower and more Socratic.
+
+## Builder First Response
+
+The first move in Builder Mode: ask exactly one Socratic question that exposes the most important missing constraint, with a brief explanation only when it helps the user answer. Builder First Response avoids immediate proposals, long questionnaires, and broad decision inventories.
+
+## Builder Audience Constraint
+
+A missing audience or user-context detail that materially changes a Builder Idea. Builder Mode should ask about audience when it affects components, privacy, workflow, or success criteria, but should not ask by default when the audience is already clear enough from the prompt.
+
+## Builder Clarification Budget
+
+The rule that Builder Mode normally generates ideas after the user's first Socratic answer. The agent may ask one additional clarifying question only when the target remains materially ambiguous enough that idea generation would likely be wrong.
+
+## Builder Idea
+
+A coherent candidate design generated in Builder Mode. A Builder Idea includes a name, thesis, three to six major components, why it fits the user, key risks, and a Builder Next Move.
+
+## Builder Thesis
+
+The central bet of a Builder Idea. A Builder Thesis explains what the idea is really trying to make true, why its components belong together, what novelty must serve, and what the Builder Grill should test.
+
+## Builder Output Shape
+
+The light structured format for Builder Mode responses. Generated Builder Ideas use name, thesis, components, why it fits the user, novel move, risks, and Builder Next Move; Builder Grill turns use component, current read, and one question, with conversational connective tissue where useful.
+
+## Builder Next Move
+
+The suggested next action after a Builder Idea or Builder Grill step. A Builder Next Move may be to build a first slice, write a PRD, save a Personal Note, create an ADR, find papers, run a prototype, keep grilling one component, discard the idea, or park it for later.
+
+## Builder Optimization Order
+
+The priority order for shaping Builder Ideas: coherence first, personal fit second, grounding third, and idea-fitting novelty fourth. Novelty should strengthen the Builder Idea's thesis, components, or next move rather than adding unrelated cleverness.
+
+## Builder Novelty Floor
+
+The rule that every Builder Idea should include at least one idea-fitting novel move. Conservative Builder Ideas get a small twist, robust Builder Ideas get one or two architectural or process innovations, and Weird-Adjacent Builder Ideas may make novelty the main framing.
+
+## Builder Idea Set
+
+The group of candidate designs generated after Builder clarification. Builder Mode produces three competing Builder Ideas by default: a conservative fastest path, a robust long-term architecture, and a weird-adjacent high-upside experiment. It may produce five ideas only for broad or explicitly exploratory brainstorming.
+
+## Builder Recommendation
+
+The agent's point-of-view selection of one Builder Idea from the generated set, justified briefly by user fit, risk, and next-move clarity. Builder Recommendation preserves user agency by asking which idea or component the user wants to grill next rather than forcing the recommended path.
+
+## Builder Choice Point
+
+The handoff after Builder Ideas are generated. The agent gives a Builder Recommendation, then asks the user to choose an idea to grill, combine pieces, sharpen the set, or take a Builder Next Move; it does not automatically grill the recommended idea.
+
+## Builder Recombination
+
+The act of combining components from multiple Builder Ideas into a new cohesive Builder Idea. Builder Recombination must produce a new name, thesis, retained components, dropped components, risks, and Builder Next Move rather than merely mashing ideas together.
+
+## Builder Fork
+
+An unresolved option inside a Builder Idea, such as two possible storage models or user surfaces. Builder Mode may preserve Builder Forks briefly during exploration, but should converge before artifact or implementation handoff, or explicitly mark the fork as an unresolved decision.
+
+## Builder Reframing
+
+The Builder Mode response to weak or incoherent ideas. Builder Reframing preserves the user's core desire, names the current incoherence or conflict, offers two or three stronger framings, and asks which framing feels closest.
+
+## Builder Taste Judgment
+
+The Builder Mode ability to say an idea is not worth pursuing in its current form while offering a salvage path. Builder Taste Judgment can recommend parking, discarding, researching, reframing, or transforming an idea based on coherence, fit, cost, constraints, and value.
+
+## Weird-Adjacent Builder Idea
+
+The high-upside Builder Idea that bends framing, architecture, workflow, or user surface while still respecting hard user constraints. Weird-Adjacent Builder Ideas may be imaginative, but must not violate privacy boundaries, budget constraints, local-only requirements, explicit non-negotiables, or action boundaries.
+
+## Builder Component
+
+A decision-bearing part of a Builder Idea that should be stress-tested before implementation, such as memory store, retrieval strategy, agent workflow, input surface, privacy boundary, correction loop, deployment model, or evaluation method. Builder Components exclude low-level implementation details unless those details materially affect the design.
+
+## Ideation Provenance
+
+A component-level source tag in a Builder Idea marking the origin of that component: `[from your notes]` for User Model or Personal Notes content, `[cited: source]` for paper-grounded claims, and `[inference]` for LLM-generated suggestions. Every component gets at least one dominant tag, with multiple tags allowed when a component mixes sources.
+
+## Builder Citation Boundary
+
+The rule that Builder Mode may use `[cited: source]` only after retrieving paper evidence with a grounding tool such as search_evidence. Components inspired by remembered concepts or general model knowledge without retrieved evidence must be tagged `[inference]`.
+
+## Builder Domain Gap
+
+A domain area in a Builder Idea where the agent lacks grounded sources or sufficient user-provided context. Builder Mode can still help structure the idea around a Builder Domain Gap, but must label domain-specific claims as inference and offer research, document ingestion, or assumption prototyping as Builder Next Moves.
+
+## Builder Codebase Grounding
+
+The rule that Builder Mode should inspect current code, docs, tests, and worktree constraints when the user is designing this agent or another local codebase. For external or non-code ideas, Builder Mode may stay conceptual unless the user asks for implementation.
+
+## Builder Note Boundary
+
+The rule that Personal Notes can shape fit, vocabulary, recurring constraints, prior design taste, and candidate components in Builder Mode, but cannot serve as source evidence for factual or architectural claims. Note-derived synthesis should be tagged `[from your notes] [inference]`.
+
+## Builder Relationship Boundary
+
+The rule that Relationship Management data may shape Builder Mode only when the user is designing relationship-related workflows or explicitly asks to use relationship context. Builder Mode should not use relationship data for unrelated ideas, broad personality inference, or examples naming real people unless directly relevant and requested.
+
+## Builder Artifact Boundary
+
+The rule that Builder Mode does not automatically save brainstorms, design choices, or inferred preferences as durable Personal Notes or User Model entries. At the end of a Builder session, the agent may offer a specific Session Artifact such as a decision note, build plan, issue list, or ADR, and only saves it after explicit user approval.
+
+## Builder Artifact Offer
+
+A specific offer to preserve a Builder Mode result as a Session Artifact after a meaningful cohesion point, such as an emerged thesis, stabilized component map, explicit decision, requested save, or chosen Builder Next Move. Builder Artifact Offers should not appear after every small exchange.
+
+## Builder Session State
+
+The transient conversational state of a Builder Mode interaction, including the current Builder Idea Set, selected Builder Idea, current Builder Component, and resolved grill questions. Builder Session State is not durably stored in the first version; durable output is created only through an explicit Session Artifact.
+
+## Builder Stopping Condition
+
+The point where a Builder Mode session is done enough: the Builder Thesis is clear, components are named and fit together, major risks and trade-offs are visible, provenance is labeled, and a Builder Next Move is chosen or intentionally parked. Builder Mode should not keep grilling after this point merely to exhaust every possible question.
+
+## Builder Tool Boundary
+
+The rule that Builder Mode remains instruction-only in its first version, using existing profile, notes, evidence, and tutor tools rather than adding a dedicated generate_builder_ideas tool. A builder tool becomes justified only if idea format, provenance tagging, selected-idea tracking, or resumability proves inconsistent.
+
+## Builder Tutor Adaptation
+
+The narrow use of Tutor Progress inside Builder Mode. Builder Tutor Adaptation tunes explanation depth, scaffolding, grill sharpness, and knowledge-gap warnings for relevant concepts, but must not lower the user's ambition, decide what the user is capable of building, or override the user's stated goal.
+
+## Builder Grill
+
+The component-level stress-test phase of Builder Mode. The agent probes one component at a time across seven dimensions: feasibility, trade-offs, hidden assumptions, risks, adjacent possibilities from papers or notes, conflicts with the user's stated preferences, and knowledge gaps surfaced by Tutor Progress. Questions are asked one at a time, one component at a time.
+
+## Record Validation
+
+The guarantee that a loaded record matches its expected shape before any business logic touches it. Implemented via TypedDict schemas and assert guards at load boundaries in each data module. Catches structural corruption from malformed JSONL lines, missing required keys, or wrong-typed fields without adding external dependencies.
+
+## Web Evidence
+
+The fourth provenance lane in the agent's answer taxonomy. Tagged `[from web: domain.com]`, presented separately from paper evidence because the trust bar is lower than peer-reviewed research, but still cited with source URLs. Web-sourced claims are capped at Medium recommendation confidence — never High.
+
+## Source Quality
+
+A classification tag on web search results indicating the type of source. Values include `official-docs`, `peer-reviewed`, `technical-blog`, `forum`, `vendor`, and `unknown`. Used alongside Recommendation Confidence to help the user gauge the trustworthiness of web-sourced claims.
+
+## Web Search Pipeline
+
+The end-to-end flow for search-augmented Q&A: user query → LLM query rewriting → search API → fetch top 3 result pages → HTML text extraction → structured results with source_quality tags and provenance labels.
+
+## Polish Preference
+
+A per-context adaptation setting controlling how much the agent rewrites the user's prose. Levels: `none` (keep exactly as written), `light` (grammar only), `moderate` (grammar + flow), `full` (significant restructuring). Learned from explicit corrections and stored in the User Model, keyed by context (chat, technical, creative, default). The agent starts proactive at `moderate` and adapts downward when the user pushes back.
+
+## Writing Mode
+
+An Agent Mode for transforming knowledge into prose with attention to voice, flow, expression, and audience. Writing Mode applies Polish Preferences to the user's prompts and responses, handling essays, reflections, drafted messages, explanations, proposals, narrative summaries, and polished notes. Distinct from Artifact Mode, which handles durable structured outputs.
+
+## Cognitive Adaptation
+
+Agent behavior adjustments that account for cognitive traits like attention variability, working memory constraints, and motivation drivers. The agent defaults to ADHD-aware interaction patterns: chunked answers, upfront structure, relevance-first explanations, varied pacing, concrete next actions, and drift-tolerant re-anchoring on session resume.
+
+## Session Metadata
+
+Lightweight per-session summary fields stored in `session_meta.jsonl`: session timing, message count, inferred goal, topic stability, completion status, and question depth trajectory. Enables future passive engagement inference without real-time tracking. Follows the same append-only JSONL pattern as interaction logs and candidate signals.
+
+## Performance Budget
+
+A per-turn runtime policy that controls latency-sensitive agent behavior, including how much context is preloaded, which tool groups are exposed, when durable memory writes are allowed, and when fresh tool calls should replace system-instruction context.
+
+## Performance Budget Tier
+
+One of three runtime performance postures: `fast` for minimal context and narrow tools, `balanced` for normal agent work, and `deep` for richer retrieval and multi-step synthesis.
+
+## Attention Drift Recovery
+
+The agent's pattern for re-engaging after a pause: acknowledge the gap without judgment, offer the anchoring context in one sentence, and ask whether to continue or pivot. Prevents recap dumps that overwhelm working memory.
+
+## Agent Persona
+
+*Replaced by Cognitive Mentor (ADR 0068).*
+
+## Mentor Mode
+
+An Agent Mode where the agent thinks through a specific thinker's cognitive framework using their ingested papers as the reasoning substrate. The default cognitive mentor is Herbert Simon (systematic design thinking, bounded rationality, evidence-grounded); Jaron Lanier is invoked by name (human-centered, contrarian, philosophical). The mentor grounds every claim in cited evidence from the thinker's own work and adapts delivery to the user's personality and cognitive traits through the full PKM infrastructure.
+
+## Cognitive Mentor
+
+An agent mode where the agent thinks through a specific thinker's frameworks using their ingested papers as the reasoning substrate, grounding every claim in cited evidence from that thinker's work. Distinct from a persona — the mentor doesn't quote, they reason through the evidence.
+
+## Mentor Relationship
+
+The bidirectional adaptation between cognitive mentor and mentee: the mentor's ingested papers provide the intellectual lens and evidence base, while the User Model personalizes delivery, pacing, and context selection for the specific person being mentored.
+
+## Builder Grill Sequence
+
+The preferred order for stress-testing a Builder Component: purpose, boundary, risk, trade-off, evidence/provenance, user fit, and first-slice test. Builder Grill Sequence is adaptive: the agent should stop probing a component once its major uncertainty is resolved rather than asking every possible question mechanically.

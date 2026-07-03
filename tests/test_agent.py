@@ -196,6 +196,95 @@ class TestSearchEvidence:
         result = search_evidence("retrieval", max_passages=1)
         assert len(result["matches"]) <= 1
 
+    def test_filters_by_evidence_scope(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent import search_evidence
+
+        simon_record = {
+            "schema_version": 2,
+            "source": "simon_design.txt",
+            "metadata": {"title": "Simon Design"},
+            "evidence_scope": ["mentor:simon"],
+            "characters": 100,
+            "page_count": 1,
+            "keywords": ["bounded", "rationality"],
+            "notes": {"concepts": [], "methods": [], "findings": [], "limitations": [], "open_questions": []},
+            "passages": [
+                {
+                    "id": "P0001",
+                    "source": "simon_design.txt",
+                    "page": None,
+                    "citation": "simon_design.txt, P0001",
+                    "text": "Bounded rationality frames design as search under constraints.",
+                    "keywords": ["bounded", "rationality", "design"],
+                }
+            ],
+        }
+        ordinary_record = {
+            "schema_version": 2,
+            "source": "fpga_design.txt",
+            "metadata": {"title": "FPGA Design"},
+            "characters": 100,
+            "page_count": 1,
+            "keywords": ["bounded", "rationality"],
+            "notes": {"concepts": [], "methods": [], "findings": [], "limitations": [], "open_questions": []},
+            "passages": [
+                {
+                    "id": "P0001",
+                    "source": "fpga_design.txt",
+                    "page": None,
+                    "citation": "fpga_design.txt, P0001",
+                    "text": "Bounded rationality appears here as an unrelated phrase.",
+                    "keywords": ["bounded", "rationality"],
+                }
+            ],
+        }
+
+        (agent.KNOWLEDGE_DIR / "simon_design.json").write_text(
+            json.dumps(simon_record), encoding="utf-8"
+        )
+        (agent.KNOWLEDGE_DIR / "fpga_design.json").write_text(
+            json.dumps(ordinary_record), encoding="utf-8"
+        )
+        agent._load_records._cache = None  # type: ignore[attr-defined]
+
+        result = search_evidence("bounded rationality", evidence_scope="mentor:simon")
+
+        assert [match["source"] for match in result["matches"]] == ["simon_design.txt"]
+
+    def test_unknown_evidence_scope_returns_no_matches(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent import search_evidence
+
+        record = {
+            "schema_version": 2,
+            "source": "simon_design.txt",
+            "metadata": {"title": "Simon Design"},
+            "evidence_scope": ["mentor:simon"],
+            "characters": 100,
+            "page_count": 1,
+            "keywords": ["bounded", "rationality"],
+            "notes": {"concepts": [], "methods": [], "findings": [], "limitations": [], "open_questions": []},
+            "passages": [
+                {
+                    "id": "P0001",
+                    "source": "simon_design.txt",
+                    "page": None,
+                    "citation": "simon_design.txt, P0001",
+                    "text": "Bounded rationality frames design as search under constraints.",
+                    "keywords": ["bounded", "rationality", "design"],
+                }
+            ],
+        }
+        (agent.KNOWLEDGE_DIR / "simon_design.json").write_text(
+            json.dumps(record), encoding="utf-8"
+        )
+        agent._load_records._cache = None  # type: ignore[attr-defined]
+
+        result = search_evidence("bounded rationality", evidence_scope="mentor:lanier")
+
+        assert result["matches"] == []
+
 
 class TestListPapers:
     def test_empty_dir(self):
@@ -211,6 +300,40 @@ class TestIngestAllPapers:
 
         result = ingest_all_papers()
         assert result["count"] == 0
+
+
+class TestIngestEvidenceScope:
+    def test_ingest_paper_stores_explicit_evidence_scope(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent import ingest_paper
+
+        (agent.PAPERS_DIR / "simon_design.txt").write_text(
+            "Bounded rationality frames design as search under constraints. "
+            "Design science studies artifacts and choices in complex situations.",
+            encoding="utf-8",
+        )
+
+        result = ingest_paper("simon_design.txt", evidence_scope="mentor:simon")
+
+        assert result["status"] == "ok"
+        record = json.loads((agent.KNOWLEDGE_DIR / "simon_design.json").read_text(encoding="utf-8"))
+        assert record["evidence_scope"] == ["mentor:simon"]
+
+    def test_ingest_paper_can_infer_mentor_scope_from_import_name(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent import ingest_paper
+
+        (agent.PAPERS_DIR / "lanier_agency.txt").write_text(
+            "Human agency matters when systems reduce people to data. "
+            "The argument centers experience and dignity in networked tools.",
+            encoding="utf-8",
+        )
+
+        result = ingest_paper("lanier_agency.txt")
+
+        assert result["status"] == "ok"
+        record = json.loads((agent.KNOWLEDGE_DIR / "lanier_agency.json").read_text(encoding="utf-8"))
+        assert record["evidence_scope"] == ["mentor:lanier"]
 
 
 class TestGetUserProfile:
@@ -235,6 +358,108 @@ class TestSetUserPreference:
 
         result = set_user_preference("nonexistent", "value")
         assert result["status"] == "error"
+
+
+class TestSessionMetadata:
+    def test_writes_runtime_session_boundaries(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent import _write_session_meta
+
+        result = _write_session_meta(
+            message_count=4,
+            inferred_goal="mentor exploration",
+            topic_stability=0.75,
+            completion_status="timeout",
+            question_depth="deepening",
+            started_at="2026-07-02T15:00:00+00:00",
+            ended_at="2026-07-02T15:22:00+00:00",
+        )
+
+        assert result["status"] == "ok"
+        meta = json.loads(agent.SESSION_META_PATH.read_text(encoding="utf-8").splitlines()[-1])
+        assert meta["started_at"] == "2026-07-02T15:00:00+00:00"
+        assert meta["ended_at"] == "2026-07-02T15:22:00+00:00"
+        assert meta["topic_stability"] == 0.75
+        assert meta["completion_status"] == "timeout"
+        assert meta["question_depth_trajectory"] == "deepening"
+
+    def test_rejects_invalid_session_metadata(self):
+        from research_paper_agent.agent import _write_session_meta
+
+        result = _write_session_meta(
+            message_count=4,
+            topic_stability=1.2,
+            completion_status="done",
+            question_depth="wandering",
+            started_at="2026-07-02T15:22:00+00:00",
+            ended_at="2026-07-02T15:00:00+00:00",
+        )
+
+        assert result["status"] == "error"
+        assert "topic_stability" in result["message"]
+        assert "completion_status" in result["message"]
+        assert "question_depth" in result["message"]
+        assert "started_at" in result["message"]
+
+
+class TestDynamicInstructionCacheStability:
+    def test_long_session_hint_does_not_change_between_consecutive_turns(self):
+        from research_paper_agent import agent
+
+        agent._SNAPSHOT_CACHE = ("", "")
+        agent._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent._now_iso(),
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+        })
+
+        class Session:
+            events: list[object]
+
+        class Ctx:
+            session: Session
+
+        first_ctx = Ctx()
+        first_ctx.session = Session()
+        first_ctx.session.events = [object()] * 81
+
+        second_ctx = Ctx()
+        second_ctx.session = Session()
+        second_ctx.session.events = [object()] * 82
+
+        first = agent._dynamic_instruction(first_ctx)
+        second = agent._dynamic_instruction(second_ctx)
+
+        assert first == second
+        assert "long session" in first
+        assert "81" not in first
+        assert "82" not in second
+
+
+class TestRelationshipWrappers:
+    def test_add_and_list_people_use_agent_people_path(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent import add_person, list_people
+
+        created = add_person(
+            "Ada Lovelace",
+            relationship_type="collaborator",
+            aliases="Ada",
+            context_note="Worked on analytical engines and design notes.",
+            tags="computing",
+            concepts="design",
+        )
+
+        assert created["status"] == "ok"
+        assert agent.PEOPLE_PATH.exists()
+
+        listed = list_people()
+        assert listed["status"] == "ok"
+        assert listed["count"] == 1
+        assert listed["people"][0]["display_name"] == "Ada Lovelace"
 
 
 # ---------------------------------------------------------------------------

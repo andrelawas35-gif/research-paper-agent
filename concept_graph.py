@@ -9,15 +9,32 @@ paper-brief annotations.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
+
+logger = logging.getLogger(__name__)
 
 _APP_DIR = Path(__file__).resolve().parent
 _USER_MODEL_DIR = _APP_DIR / "user_model"
 CONCEPT_GRAPH_PATH = _USER_MODEL_DIR / "concept_graph.json"
 
 _EDGE_TYPES = frozenset({"ingest", "engaged", "saved", "rejected", "note"})
+
+
+# ── ADR 0056: Record schema ──────────────────────────────────────────
+
+
+class ConceptEdge(TypedDict, total=False):
+    interest: str
+    concept: str
+    type: str
+    weight: float
+    source_papers: list[str]
+    sources: list[dict[str, str]]
+    created_at: str
+    last_engaged_at: str | None
 
 # In-memory cache — invalidated on every _save().
 _graph_cache: dict[str, Any] | None = None
@@ -100,6 +117,19 @@ def _edge_weight(
 # ---------------------------------------------------------------------------
 
 
+def _validate_edge(edge: dict[str, Any]) -> bool:
+    """Return True if the edge has all required ConceptEdge fields."""
+    if not isinstance(edge.get("interest"), str) or not edge["interest"]:
+        return False
+    if not isinstance(edge.get("concept"), str) or not edge["concept"]:
+        return False
+    if edge.get("type") not in _EDGE_TYPES:
+        return False
+    if not isinstance(edge.get("weight"), (int, float)):
+        return False
+    return True
+
+
 def load() -> dict[str, Any]:
     """Load the concept graph, returning defaults when the file is missing."""
     global _graph_cache
@@ -113,6 +143,20 @@ def load() -> dict[str, Any]:
         return graph
     try:
         graph = json.loads(CONCEPT_GRAPH_PATH.read_text(encoding="utf-8"))
+        # Validate edges on load — prune malformed ones.
+        edges = graph.get("edges", {})
+        pruned = 0
+        for interest_key in list(edges):
+            concept_edges = edges.get(interest_key, {})
+            for concept_key in list(concept_edges):
+                if not _validate_edge(concept_edges[concept_key]):
+                    logger.warning("Pruning invalid edge: %s → %s", interest_key, concept_key)
+                    del concept_edges[concept_key]
+                    pruned += 1
+            if not concept_edges:
+                del edges[interest_key]
+        if pruned:
+            logger.warning("Pruned %d invalid edges from concept graph", pruned)
         _graph_cache = graph
         return graph
     except json.JSONDecodeError:
