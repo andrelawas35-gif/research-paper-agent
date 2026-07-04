@@ -406,7 +406,7 @@ class TestDynamicInstructionCacheStability:
     def test_long_session_hint_does_not_change_between_consecutive_turns(self):
         from research_paper_agent import agent
 
-        agent._SNAPSHOT_CACHE = ("", "")
+        agent._SNAPSHOT_CACHE.clear()
         agent._save_user_profile({
             "schema_version": 1,
             "updated_at": agent._now_iso(),
@@ -439,6 +439,488 @@ class TestDynamicInstructionCacheStability:
         assert "82" not in second
 
 
+# ---------------------------------------------------------------------------
+# ADR 0072: Performance Budget — inference and snapshot tests
+# ---------------------------------------------------------------------------
+
+
+class TestBudgetInference:
+    """Pure budget inference from text — no ADK context needed."""
+
+    @pytest.mark.parametrize("text,expected", [
+        ("keep it quick", "fast"),
+        ("fast mode", "fast"),
+        ("just tell me the answer", "fast"),
+        ("quickly check this", "fast"),
+        ("don't explain, just do it", "fast"),
+        ("make it fast", "fast"),
+        ("think deeply about this", "deep"),
+        ("deep mode analysis", "deep"),
+        ("go deep on this topic", "deep"),
+        ("thorough review", "deep"),
+        ("comprehensive analysis", "deep"),
+        ("in-depth explanation", "deep"),
+        ("take your time", "deep"),
+    ])
+    def test_explicit_wording_wins(self, text, expected):
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _infer_performance_budget_from_text,
+        )
+
+        assert _infer_performance_budget_from_text(text) == expected
+
+    def test_empty_text_falls_back_to_balanced(self):
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _infer_performance_budget_from_text,
+        )
+
+        assert _infer_performance_budget_from_text("") == "balanced"
+
+    def test_no_signal_defaults_to_balanced(self):
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _infer_performance_budget_from_text,
+        )
+
+        assert _infer_performance_budget_from_text("hello, what papers do I have?") == "balanced"
+
+    def test_mode_hint_suggests_deep(self):
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _infer_performance_budget_from_text,
+        )
+
+        # Grill mode should suggest deep when no explicit wording.
+        assert _infer_performance_budget_from_text("grill me on this paper", "grill") == "deep"
+
+    def test_explicit_beats_mode_hint(self):
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _infer_performance_budget_from_text,
+        )
+
+        # "keep it quick" beats "grill" mode hint.
+        assert _infer_performance_budget_from_text("keep it quick, grill me", "grill") == "fast"
+
+    def test_mode_hint_suggests_fast(self):
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _infer_performance_budget_from_text,
+        )
+
+        assert _infer_performance_budget_from_text("list my papers", "admin") == "fast"
+
+    def test_unknown_mode_hint_falls_back(self):
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _infer_performance_budget_from_text,
+        )
+
+        assert _infer_performance_budget_from_text("some text", "unknown_mode") == "balanced"
+
+    def test_context_extraction_failure_falls_back(self):
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _infer_performance_budget,
+        )
+
+        # None context should not raise.
+        result = _infer_performance_budget(None)
+        assert result == "balanced"
+
+    def test_validate_tier_rejects_invalid(self):
+        from research_paper_agent.agent_runtime.dynamic_context import _validate_tier
+
+        assert _validate_tier("invalid") == "balanced"
+        assert _validate_tier("fast") == "fast"
+        assert _validate_tier("DEEP") == "deep"
+
+
+class TestBalancedSnapshot:
+    """Balanced snapshot includes only stable orientation fields."""
+
+    def test_includes_stable_fields(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _build_balanced_snapshot,
+        )
+
+        agent._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent._now_iso(),
+            "interests": [{"name": "research agents", "evidence": "test", "confidence": 0.8}],
+            "style_preferences": [{"preference": "be direct", "evidence": "test", "confidence": 0.7}],
+            "adaptation_rules": [],
+            "avoidances": [{"rule": "no small talk", "source": "test", "confidence": 0.6}],
+            "polish_preferences": {"default": "moderate"},
+            "grammar_and_quirks": [{"observation": "lowercase", "evidence": "test", "confidence": 0.5}],
+        })
+
+        snapshot = _build_balanced_snapshot()
+        assert "interests:" in snapshot
+        assert "research agents" in snapshot
+        assert "style:" in snapshot
+        assert "be direct" in snapshot
+        assert "polish: moderate" in snapshot
+        assert "avoid:" in snapshot
+        assert "no small talk" in snapshot
+        assert "quirks:" in snapshot
+        assert "lowercase" in snapshot
+
+    def test_excludes_recent_notes(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _build_balanced_snapshot,
+        )
+
+        agent._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent._now_iso(),
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+        })
+
+        snapshot = _build_balanced_snapshot()
+        assert "recent notes:" not in snapshot
+
+    def test_excludes_weak_concepts(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _build_balanced_snapshot,
+        )
+
+        agent._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent._now_iso(),
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+        })
+
+        snapshot = _build_balanced_snapshot()
+        assert "weak concepts:" not in snapshot
+
+    def test_excludes_session_metadata(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _build_balanced_snapshot,
+        )
+
+        agent._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent._now_iso(),
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+        })
+
+        snapshot = _build_balanced_snapshot()
+        assert "prior session:" not in snapshot
+
+    def test_no_volatile_counts(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _build_balanced_snapshot,
+        )
+
+        agent._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent._now_iso(),
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+        })
+
+        snapshot = _build_balanced_snapshot()
+        # Counts like "(5)" after concepts should not appear.
+        if "top concepts:" in snapshot:
+            import re
+            concepts_part = snapshot.split("top concepts:")[1].split("\n")[0]
+            assert not re.search(r"\(\d+\)", concepts_part)
+
+
+class TestFastBudget:
+    """Fast budget bypasses snapshot entirely."""
+
+    def test_fast_returns_empty_string(self):
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _infer_performance_budget_from_text,
+            build_dynamic_instruction,
+        )
+
+        # Create a context where the latest user text triggers fast.
+        class Event:
+            author = "user"
+            content = "keep it quick"
+
+        class Session:
+            events: list[Event]
+
+        class Ctx:
+            session: Session
+
+        ctx = Ctx()
+        ctx.session = Session()
+        ctx.session.events = [Event()]
+
+        result = build_dynamic_instruction(ctx)
+        assert result == ""
+
+
+class TestBudgetCacheStability:
+    """Cache stability across consecutive turns per ADR 0072."""
+
+    def test_consecutive_balanced_turns_return_same_text(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _SNAPSHOT_CACHE,
+            build_dynamic_instruction,
+        )
+
+        _SNAPSHOT_CACHE.clear()
+        agent._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent._now_iso(),
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+        })
+
+        class Session:
+            events: list[object]
+
+        class Ctx:
+            session: Session
+
+        ctx1 = Ctx()
+        ctx1.session = Session()
+        ctx1.session.events = [object()] * 5
+
+        ctx2 = Ctx()
+        ctx2.session = Session()
+        ctx2.session.events = [object()] * 6
+
+        first = build_dynamic_instruction(ctx1)
+        second = build_dynamic_instruction(ctx2)
+
+        assert first == second
+        assert len(first) > 0  # balanced should return a non-empty snapshot
+
+    def test_fast_always_returns_empty(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _SNAPSHOT_CACHE,
+            build_dynamic_instruction,
+        )
+
+        _SNAPSHOT_CACHE.clear()
+        agent._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent._now_iso(),
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+        })
+
+        class Event:
+            author = "user"
+            content = "fast mode please"
+
+        class Session:
+            events: list[Event]
+
+        class Ctx:
+            session: Session
+
+        ctx = Ctx()
+        ctx.session = Session()
+        ctx.session.events = [Event()]
+
+        first = build_dynamic_instruction(ctx)
+        second = build_dynamic_instruction(ctx)
+
+        assert first == ""
+        assert second == ""
+
+
+# ---------------------------------------------------------------------------
+# ADR 0066: Polish preference learning tests
+# ---------------------------------------------------------------------------
+
+
+class TestPolishPreferenceLearning:
+    def test_learn_from_user_message_updates_polish_preferences(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent import learn_from_user_message
+
+        agent._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent._now_iso(),
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+        })
+
+        result = learn_from_user_message("keep my wording, don't rewrite")
+
+        assert result["status"] == "ok"
+        profile = agent._load_user_profile()
+        assert profile["polish_preferences"]["default"] == "none"
+
+    def test_polish_correction_too_formal(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent import learn_from_user_message
+
+        agent._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent._now_iso(),
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+        })
+
+        result = learn_from_user_message("this is too formal, just fix grammar")
+
+        assert result["status"] == "ok"
+        profile = agent._load_user_profile()
+        assert profile["polish_preferences"]["default"] == "light"
+
+    def test_polish_correction_too_casual(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent import learn_from_user_message
+
+        agent._save_user_profile({
+            "schema_version": 1,
+            "updated_at": agent._now_iso(),
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+        })
+
+        result = learn_from_user_message("make it flow better, polish this up")
+
+        assert result["status"] == "ok"
+        profile = agent._load_user_profile()
+        assert profile["polish_preferences"]["default"] == "full"
+
+    def test_polish_signal_detection_none(self):
+        from research_paper_agent.agent import _infer_message_signals
+
+        signals = _infer_message_signals("keep my wording please")
+        assert len(signals["polish_corrections"]) > 0
+        assert signals["polish_corrections"][0]["level"] == "none"
+
+    def test_polish_signal_detection_light(self):
+        from research_paper_agent.agent import _infer_message_signals
+
+        signals = _infer_message_signals("that's too formal for me")
+        assert len(signals["polish_corrections"]) > 0
+        assert signals["polish_corrections"][0]["level"] == "light"
+
+    def test_no_polish_signal_for_normal_message(self):
+        from research_paper_agent.agent import _infer_message_signals
+
+        signals = _infer_message_signals("what papers do I have about agents?")
+        assert signals["polish_corrections"] == []
+
+
+# ---------------------------------------------------------------------------
+# ADR 0070: Record validation tests
+# ---------------------------------------------------------------------------
+
+
+class TestRecordValidation:
+    def test_validate_profile_rejects_missing_fields(self):
+        from research_paper_agent.agent import _validate_profile
+
+        assert not _validate_profile({"schema_version": 1})
+        assert not _validate_profile({})
+
+    def test_validate_profile_accepts_valid(self):
+        from research_paper_agent.agent import _validate_profile
+
+        assert _validate_profile({
+            "schema_version": 1,
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+        })
+
+    def test_validate_profile_accepts_polish_preferences(self):
+        from research_paper_agent.agent import _validate_profile
+
+        assert _validate_profile({
+            "schema_version": 1,
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+            "polish_preferences": {"default": "moderate"},
+        })
+
+    def test_validate_profile_rejects_bad_polish(self):
+        from research_paper_agent.agent import _validate_profile
+
+        assert not _validate_profile({
+            "schema_version": 1,
+            "interests": [],
+            "style_preferences": [],
+            "adaptation_rules": [],
+            "avoidances": [],
+            "polish_preferences": "not a dict",
+        })
+
+    def test_validate_candidate_signal_rejects_missing_fields(self):
+        from research_paper_agent.agent import _validate_candidate_signal
+
+        assert not _validate_candidate_signal({"source": "test"})
+        assert not _validate_candidate_signal({"timestamp": "2026-01-01"})
+
+    def test_validate_candidate_signal_accepts_valid(self):
+        from research_paper_agent.agent import _validate_candidate_signal
+
+        assert _validate_candidate_signal({
+            "timestamp": "2026-07-03T12:00:00Z",
+            "signals": [{"type": "interest", "value": "test"}],
+        })
+
+    def test_validate_tutor_progress_rejects_missing_fields(self):
+        from research_paper_agent.agent import _validate_tutor_progress
+
+        assert not _validate_tutor_progress({"schema_version": "abc"})
+        assert not _validate_tutor_progress({"concepts": {}})
+
+    def test_validate_tutor_progress_accepts_valid(self):
+        from research_paper_agent.agent import _validate_tutor_progress
+
+        assert _validate_tutor_progress({
+            "schema_version": 1,
+            "concepts": {"embeddings": {"times_asked": 3, "times_correct": 2}},
+        })
+
+    def test_validate_tutor_progress_defaults_on_corruption(self):
+        from research_paper_agent import agent
+
+        # Write corrupted tutor progress and verify recovery.
+        agent.TUTOR_PROGRESS_PATH.write_text(
+            '{"schema_version": "bad", "concepts": "not a dict"}',
+            encoding="utf-8",
+        )
+        # Clear the cache so it re-reads.
+        agent._load_tutor_progress._cache = None  # type: ignore[attr-defined]
+
+        progress = agent._load_tutor_progress()
+        assert progress["schema_version"] == 1
+        assert isinstance(progress["concepts"], dict)
+        # Clean up — write valid progress.
+        agent._save_tutor_progress({"schema_version": 1, "concepts": {}})
+
+
 class TestRelationshipWrappers:
     def test_add_and_list_people_use_agent_people_path(self):
         from research_paper_agent import agent
@@ -460,6 +942,91 @@ class TestRelationshipWrappers:
         assert listed["status"] == "ok"
         assert listed["count"] == 1
         assert listed["people"][0]["display_name"] == "Ada Lovelace"
+
+
+# ---------------------------------------------------------------------------
+# ADR 0072 Slice 2: Write gating, tool groups, diagnostics
+# ---------------------------------------------------------------------------
+
+
+class TestWriteGating:
+    def test_fast_allows_explicit_memory_only(self):
+        from research_paper_agent.agent_runtime.dynamic_context import write_allowed
+
+        assert write_allowed("memory", "fast", "explicit") is True
+        assert write_allowed("note", "fast", "explicit") is True
+        assert write_allowed("profile", "fast", "explicit") is False
+        assert write_allowed("graph", "fast", "explicit") is False
+        assert write_allowed("projection", "fast", "explicit") is False
+
+    def test_fast_blocks_candidate_signals(self):
+        from research_paper_agent.agent_runtime.dynamic_context import write_allowed
+
+        assert write_allowed("memory", "fast", "candidate") is False
+        assert write_allowed("note", "fast", "candidate") is False
+
+    def test_balanced_allows_explicit_and_high_confidence(self):
+        from research_paper_agent.agent_runtime.dynamic_context import write_allowed
+
+        assert write_allowed("memory", "balanced", "explicit") is True
+        assert write_allowed("note", "balanced", "high_confidence") is True
+        assert write_allowed("graph", "balanced", "high_confidence") is True
+
+    def test_balanced_blocks_candidate(self):
+        from research_paper_agent.agent_runtime.dynamic_context import write_allowed
+
+        assert write_allowed("memory", "balanced", "candidate") is False
+
+    def test_deep_allows_candidate_projection(self):
+        from research_paper_agent.agent_runtime.dynamic_context import write_allowed
+
+        assert write_allowed("projection", "deep", "candidate") is True
+        assert write_allowed("note", "deep", "candidate") is False
+
+    def test_deep_blocks_candidate_durable_prefs(self):
+        from research_paper_agent.agent_runtime.dynamic_context import write_allowed
+
+        # Durable preferences (memory, profile) still need explicit or high_confidence.
+        assert write_allowed("memory", "deep", "candidate") is False
+        assert write_allowed("profile", "deep", "candidate") is False
+
+    def test_invalid_budget_falls_back_to_balanced(self):
+        from research_paper_agent.agent_runtime.dynamic_context import write_allowed
+
+        # Unknown budget → balanced rules apply.
+        assert write_allowed("note", "invalid", "explicit") is True
+        assert write_allowed("memory", "invalid", "candidate") is False
+
+
+class TestToolGroups:
+    def test_fast_tools_are_read_only(self):
+        from research_paper_agent.agent_runtime.dynamic_context import _allowed_tool_names
+
+        fast = _allowed_tool_names("fast")
+        assert "list_papers" in fast
+        assert "get_user_profile" in fast
+        # Write and heavy tools excluded.
+        assert "save_personal_note" not in fast
+        assert "ingest_paper" not in fast
+        assert "adaptive_grill" not in fast
+
+    def test_balanced_includes_search_and_write(self):
+        from research_paper_agent.agent_runtime.dynamic_context import _allowed_tool_names
+
+        balanced = _allowed_tool_names("balanced")
+        assert "search_evidence" in balanced
+        assert "save_personal_note" in balanced
+        # Heavy tools excluded.
+        assert "ingest_paper" not in balanced
+        assert "adaptive_grill" not in balanced
+
+    def test_deep_includes_everything(self):
+        from research_paper_agent.agent_runtime.dynamic_context import _allowed_tool_names
+
+        deep = _allowed_tool_names("deep")
+        assert "ingest_paper" in deep
+        assert "adaptive_grill" in deep
+        assert "rename_paper" in deep
 
 
 # ---------------------------------------------------------------------------

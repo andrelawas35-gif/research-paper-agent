@@ -8,7 +8,7 @@ import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from google.adk.agents.llm_agent import Agent
 
@@ -18,6 +18,71 @@ from openai import AsyncOpenAI
 from openai import OpenAI
 
 from . import concept_graph, personal_notes, relationship_management
+from .agent_runtime import dynamic_context as _dynamic_ctx
+from .agent_runtime.paths import ensure_dirs as _ensure_dirs_impl
+
+# ── Architecture Plan Phase 3: paper tools + retrieval from agent_runtime ─
+from .agent_runtime.retrieval import (  # noqa: E402, F401
+    search_evidence as _rt_search_evidence,
+)
+from .agent_runtime.papers import (  # noqa: E402, F401
+    compare_papers as _rt_compare_papers,
+    delete_paper as _rt_delete_paper,
+    ingest_all_papers as _rt_ingest_all_papers,
+    ingest_paper as _rt_ingest_paper,
+    list_concepts as _rt_list_concepts,
+    list_papers as _rt_list_papers,
+    make_study_guide as _rt_make_study_guide,
+    organize_papers as _rt_organize_papers,
+    paper_brief as _rt_paper_brief,
+    rename_paper as _rt_rename_paper,
+)
+
+# Override public paper/search tools with agent_runtime implementations.
+search_evidence = _rt_search_evidence
+compare_papers = _rt_compare_papers
+delete_paper = _rt_delete_paper
+ingest_all_papers = _rt_ingest_all_papers
+ingest_paper = _rt_ingest_paper
+list_concepts = _rt_list_concepts
+list_papers = _rt_list_papers
+make_study_guide = _rt_make_study_guide
+organize_papers = _rt_organize_papers
+paper_brief = _rt_paper_brief
+rename_paper = _rt_rename_paper
+
+# ── Architecture Plan Phase 4: mode-specific modules ───────────────────────────────────
+from .agent_runtime.web_search import (  # noqa: E402
+    classify_source_quality as _ws_classify_source_quality,
+    search_web as _ws_search_web,
+)
+from .agent_runtime.audit import (  # noqa: E402
+    knowledge_self_audit as _audit_knowledge_self_audit,
+    self_audit_correction as _audit_self_audit_correction,
+)
+from .agent_runtime.grill import (  # noqa: E402
+    adaptive_grill as _grill_adaptive_grill,
+    respond_to_adaptive_grill as _grill_respond_to_adaptive_grill,
+)
+from .agent_runtime.tutor import (  # noqa: E402
+    _grade_answer as _tutor_grade_answer,
+    _load_tutor_progress as _tutor_load_tutor_progress,
+    _next_concept as _tutor_next_concept,
+    _save_tutor_progress as _tutor_save_tutor_progress,
+    _validate_tutor_progress as _tutor_validate_tutor_progress,
+)
+
+search_web = _ws_search_web
+_classify_source_quality = _ws_classify_source_quality
+knowledge_self_audit = _audit_knowledge_self_audit
+self_audit_correction = _audit_self_audit_correction
+adaptive_grill = _grill_adaptive_grill
+respond_to_adaptive_grill = _grill_respond_to_adaptive_grill
+_grade_answer = _tutor_grade_answer
+_load_tutor_progress = _tutor_load_tutor_progress
+_next_concept = _tutor_next_concept
+_save_tutor_progress = _tutor_save_tutor_progress
+_validate_tutor_progress = _tutor_validate_tutor_progress
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -39,6 +104,38 @@ SESSION_META_PATH = USER_MODEL_DIR / "session_meta.jsonl"
 # Each call to _search_semantic_scholar drains the token bucket before sending.
 _SCHOLAR_LAST_REQUEST: float = 0.0
 _SCHOLAR_MIN_INTERVAL: float = 1.2  # seconds between requests (little margin above 1.0)
+
+
+# ── ADR 0070: Record schemas ────────────────────────────────────────
+
+
+class UserProfile(TypedDict, total=False):
+    schema_version: int
+    updated_at: str
+    summary: str
+    interests: list[dict[str, Any]]
+    style_preferences: list[dict[str, Any]]
+    adaptation_rules: list[dict[str, Any]]
+    avoidances: list[dict[str, Any]]
+    polish_preferences: dict[str, str]
+    grammar_and_quirks: list[dict[str, Any]]
+    question_patterns: list[dict[str, Any]]
+    last_learned_from: str
+    recovery_note: str
+
+
+class CandidateSignal(TypedDict, total=False):
+    timestamp: str
+    source: str
+    signals: list[dict[str, Any]]
+
+
+class TutorProgress(TypedDict, total=False):
+    schema_version: int
+    updated_at: str
+    concepts: dict[str, dict[str, Any]]
+    last_session: str
+    recovery_note: str
 
 
 STOPWORDS = {
@@ -127,9 +224,7 @@ class DeepSeekLlm(OpenAILlm):
 
 
 def _ensure_dirs() -> None:
-    PAPERS_DIR.mkdir(exist_ok=True)
-    KNOWLEDGE_DIR.mkdir(exist_ok=True)
-    USER_MODEL_DIR.mkdir(exist_ok=True)
+    _ensure_dirs_impl()
 
 
 def _read_pdf_pages(path: Path) -> list[dict[str, Any]]:
@@ -454,7 +549,13 @@ def _score_passage(query_terms: list[str], passage: dict[str, Any], document_cou
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    """Return the current UTC time as an ISO 8601 string.
+
+    Delegates to agent_runtime.paths.now_iso.
+    """
+    from .agent_runtime.paths import now_iso as _paths_now_iso
+
+    return _paths_now_iso()
 
 
 def _parse_iso_datetime(value: str, field_name: str, errors: list[str]) -> datetime | None:
@@ -566,6 +667,9 @@ def _validate_profile(profile: dict[str, Any]) -> bool:
         return False
     if not isinstance(profile.get("avoidances"), list):
         return False
+    polish = profile.get("polish_preferences")
+    if polish is not None and not isinstance(polish, dict):
+        return False
     return True
 
 
@@ -628,6 +732,7 @@ def _infer_message_signals(message: str) -> dict[str, list[dict[str, Any]]]:
         "question_patterns": [],
         "style_preferences": [],
         "grammar_and_quirks": [],
+        "polish_corrections": [],
     }
 
     topic_map = {
@@ -691,6 +796,39 @@ def _infer_message_signals(message: str) -> dict[str, list[dict[str, Any]]]:
                 "confidence": 0.68,
             }
         )
+
+    # ── ADR 0066: Polish preference corrections ─────────────────────
+    if any(phrase in lower for phrase in [
+        "keep my wording", "don't rewrite", "leave my words",
+        "don't change my wording", "that's not what i meant",
+        "you changed what i said", "exact wording",
+    ]):
+        signals["polish_corrections"].append(
+            {"context": "default", "level": "none",
+             "evidence": message[:240], "confidence": 0.75}
+        )
+    if any(phrase in lower for phrase in [
+        "too formal", "just fix grammar", "only fix errors",
+        "don't change the style",
+    ]):
+        signals["polish_corrections"].append(
+            {"context": "default", "level": "light",
+             "evidence": message[:240], "confidence": 0.75}
+        )
+    if any(phrase in lower for phrase in [
+        "too casual", "make it flow better", "polish this up",
+        "make this sound better", "can you improve this",
+    ]):
+        signals["polish_corrections"].append(
+            {"context": "default", "level": "full",
+             "evidence": message[:240], "confidence": 0.7}
+        )
+    # Context-specific corrections.
+    for ctx_word, ctx_key in [("chat", "chat"), ("technical", "technical"),
+                               ("creative", "creative")]:
+        if ctx_word in lower:
+            for corr in signals["polish_corrections"]:
+                corr["context"] = ctx_key
 
     return signals
 
@@ -777,8 +915,20 @@ def _append_grill_session(session: dict[str, Any]) -> None:
 
 def _record_candidate_signals(event: dict[str, Any]) -> None:
     _ensure_dirs()
+    if not _validate_candidate_signal(event):
+        logger.warning("Rejecting malformed candidate signal: %s", event.get("timestamp", "unknown"))
+        return
     with CANDIDATE_SIGNALS_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event) + "\n")
+
+
+def _validate_candidate_signal(record: dict[str, Any]) -> bool:
+    """Return True if a candidate signal record has required fields."""
+    if not isinstance(record.get("timestamp"), str):
+        return False
+    if not isinstance(record.get("signals"), list):
+        return False
+    return True
 
 
 def _is_explicit_memory_request(text: str) -> bool:
@@ -1361,6 +1511,16 @@ def learn_from_user_message(message: str, context: str = "") -> dict[str, Any]:
     added: dict[str, int] = {}
     for bucket, items in signals.items():
         added[bucket] = 0
+        # ADR 0066: Polish corrections update a dict, not a list.
+        if bucket == "polish_corrections":
+            if items:
+                polish_prefs = profile.setdefault("polish_preferences", {})
+                for correction in items:
+                    ctx = correction.get("context", "default")
+                    level = correction.get("level", "moderate")
+                    polish_prefs[ctx] = level
+                added[bucket] = len(items)
+            continue
         key = {
             "interests": "name",
             "question_patterns": "pattern",
@@ -2654,8 +2814,22 @@ def _load_tutor_progress() -> dict[str, Any]:
     except json.JSONDecodeError:
         progress = {"schema_version": 1, "concepts": {}, "recovery_note": "file was unreadable"}
         TUTOR_PROGRESS_PATH.write_text(json.dumps(progress, indent=2), encoding="utf-8")
+    if not _validate_tutor_progress(progress):
+        logger.warning("Tutor progress failed validation, restoring defaults")
+        progress = {"schema_version": 1, "concepts": {},
+                      "recovery_note": "tutor_progress.json failed validation"}
+        TUTOR_PROGRESS_PATH.write_text(json.dumps(progress, indent=2), encoding="utf-8")
     _load_tutor_progress._cache = progress  # type: ignore[attr-defined]
     return progress
+
+
+def _validate_tutor_progress(progress: dict[str, Any]) -> bool:
+    """Return True if tutor progress has required fields with correct types."""
+    if not isinstance(progress.get("schema_version"), int):
+        return False
+    if not isinstance(progress.get("concepts"), dict):
+        return False
+    return True
 
 
 def _save_tutor_progress(progress: dict[str, Any]) -> None:
@@ -2937,133 +3111,29 @@ def _safe_tool(fn):
 # remember to call profile/notes/graph tools.  Target: ≤ 500 tokens.
 #
 # The snapshot is cache-stabilized: it only rebuilds when the underlying
-# state actually changes (profile edits, note saves, concept updates).
-# This prevents the LLM provider's context cache from being invalidated
-# on every turn by a trivially-different instruction string.
+# ── ADR 0072 / Architecture Plan Phase 1 ────────────────────────────
+# Dynamic context construction has been extracted to
+# agent_runtime/dynamic_context.py.  Re-export the cache for test
+# compatibility and keep the public _dynamic_instruction entry point.
 
-_SNAPSHOT_CACHE: tuple[str, str] = ("", "")  # (state_hash, snapshot_text)
+_SNAPSHOT_CACHE = _dynamic_ctx._SNAPSHOT_CACHE  # re-export for tests
 
 
 def _state_fingerprint() -> str:
     """Return a short hash of all durable state that feeds the snapshot.
 
-    When this hash changes, the snapshot is rebuilt.  When it stays the
-    same, the cached snapshot is reused — keeping the instruction
-    identical across turns and preserving the LLM context cache.
+    Delegates to agent_runtime.dynamic_context.state_fingerprint.
     """
-    import hashlib
-    h = hashlib.sha1()
-    try:
-        h.update(USER_PROFILE_PATH.read_bytes())
-    except Exception:
-        pass
-    try:
-        h.update(CONCEPT_GRAPH_PATH.read_bytes())
-    except Exception:
-        pass
-    try:
-        h.update(PERSONAL_NOTES_PATH.read_bytes())
-    except Exception:
-        pass
-    try:
-        h.update(TUTOR_PROGRESS_PATH.read_bytes())
-    except Exception:
-        pass
-    return h.hexdigest()[:16]
+    return _dynamic_ctx.state_fingerprint()
 
 
 def _build_snapshot(ctx: Any | None = None) -> str:
-    """Build a compact context header from durable state.
+    """Build a compact context header — legacy path, delegates to deep snapshot.
 
-    Called once per turn by the dynamic instruction provider.  The header
-    gives the LLM a low-latency summary of who the user is, what they're
-    working on, and what the agent knows — without requiring tool calls.
+    Kept for backward compatibility; new code should use the budget-aware
+    builders in agent_runtime.dynamic_context.
     """
-    profile = _load_user_profile()
-
-    parts: list[str] = ["[context snapshot]"]
-
-    # ── who ─────────────────────────────────────────────────────────
-    interests = [i.get("name", "") for i in profile.get("interests", [])[:5]]
-    style = [s.get("preference", "") for s in profile.get("style_preferences", [])[:3]]
-    polish = profile.get("polish_preferences", {})
-    polish_default = polish.get("default", "moderate") if isinstance(polish, dict) else "moderate"
-    avoidances = [a.get("rule", "") for a in profile.get("avoidances", [])[:2]]
-    quirks = [q.get("observation", "") for q in profile.get("grammar_and_quirks", [])[:2]]
-
-    who_lines = []
-    if interests:
-        who_lines.append(f"interests: {', '.join(interests)}")
-    if style:
-        who_lines.append(f"style: {', '.join(style)}")
-    who_lines.append(f"polish: {polish_default}")
-    if avoidances:
-        who_lines.append(f"avoid: {', '.join(avoidances)}")
-    if quirks:
-        who_lines.append(f"quirks: {', '.join(quirks)}")
-    parts.append("user: " + "; ".join(who_lines))
-
-    # ── what ────────────────────────────────────────────────────────
-    # Recent personal notes (last 5, titles + top concepts only).
-    try:
-        notes = personal_notes.load_notes()
-        active = [n for n in notes if not n.get("deleted") and n.get("title")]
-        active.sort(key=lambda n: n.get("updated_at", n.get("created_at", "")), reverse=True)
-        recent = active[:5]
-        if recent:
-            note_lines = []
-            for n in recent:
-                title = n.get("title", "")[:60]
-                concepts = [c.get("name", "") for c in n.get("concepts", [])[:3]]
-                label = f"{title}"
-                if concepts:
-                    label += f" [{', '.join(concepts)}]"
-                note_lines.append(label)
-            parts.append("recent notes: " + " | ".join(note_lines))
-    except Exception:
-        pass  # notes unavailable — skip
-
-    # ── graph ───────────────────────────────────────────────────────
-    try:
-        g = concept_graph.load()
-        edges = g.get("edges", [])
-        # Top concepts by edge count.
-        edge_count: dict[str, int] = {}
-        for e in edges:
-            c = e.get("concept", "")
-            if c:
-                edge_count[c] = edge_count.get(c, 0) + 1
-        top = sorted(edge_count.items(), key=lambda x: -x[1])[:5]
-        if top:
-            parts.append("top concepts: " + ", ".join(f"{c}({n})" for c, n in top))
-    except Exception:
-        pass
-
-    # ── tutor ───────────────────────────────────────────────────────
-    try:
-        tp = json.loads(TUTOR_PROGRESS_PATH.read_text()) if TUTOR_PROGRESS_PATH.exists() else {}
-        weak = [c for c, s in tp.get("mastery", {}).items() if s < 0.5]
-        if weak:
-            parts.append(f"weak concepts: {', '.join(weak[:5])}")
-    except Exception:
-        pass
-
-    # ── session context (re-anchor) ─────────────────────────────────
-    try:
-        if SESSION_META_PATH.exists():
-            lines = SESSION_META_PATH.read_text().strip().splitlines()
-            if lines:
-                last = json.loads(lines[-1])
-                goal = last.get("inferred_goal", "")
-                status = last.get("completion_status", "")
-                if goal and status != "ended_naturally":
-                    parts.append(
-                        f"prior session: {goal} (unfinished, msg count {last.get('message_count', '?')})"
-                    )
-    except Exception:
-        pass
-
-    return "\n".join(parts)
+    return _dynamic_ctx._build_deep_snapshot(ctx)
 
 
 # The static instruction body (extracted from the old inline string so
@@ -3268,49 +3338,16 @@ _STATIC_INSTRUCTION = (
 
 
 def _dynamic_instruction(ctx: Any) -> str:
-    """Instruction provider: return the context snapshot (only).
+    """Instruction provider: delegate to budget-aware dynamic context.
 
-    The static instruction body is set via `static_instruction=` so it
-    stays in the cacheable system-instruction slot.  This callable
-    returns only the lightweight snapshot header, and it reuses a cached
-    copy when the underlying state hasn't changed.
+    ADR 0072 Slice 1: the agent_runtime.dynamic_context module handles
+    budget inference, tier-specific snapshot construction, budget-aware
+    caching, and compaction hints.
 
-    When the session grows long (> 80 events), we append a compaction
-    hint — the event count is intentionally NOT part of the state
-    fingerprint, so the hint appears only when the session is genuinely
-    long, without invalidating the cache on every intermediate turn.
+    The static instruction body is set via ``static_instruction=`` so it
+    stays in the cacheable system-instruction slot.
     """
-    global _SNAPSHOT_CACHE
-
-    fp = _state_fingerprint()
-    cached_fp, cached_text = _SNAPSHOT_CACHE
-    if fp == cached_fp and cached_text:
-        snapshot = cached_text
-    else:
-        try:
-            snapshot = _build_snapshot(ctx)
-        except Exception:
-            snapshot = "[context snapshot unavailable]"
-        _SNAPSHOT_CACHE = (fp, snapshot)
-
-    # Compaction hint: only when the session is genuinely long.  The
-    # event count varies per-turn but the hint text is fixed — it won't
-    # break the cache for most turn pairs.
-    if ctx is not None:
-        try:
-            events = getattr(getattr(ctx, "session", None), "events", [])
-            event_count = len(events) if events else 0
-            if event_count > 80:
-                snapshot += (
-                    "\n[compaction: long session. Be concise. "
-                    "Lead with the most relevant insight. "
-                    "Skip historical recaps. "
-                    "Prefer actionable next steps.]"
-                )
-        except Exception:
-            pass
-
-    return snapshot
+    return _dynamic_ctx.build_dynamic_instruction(ctx)
 
 
 root_agent = Agent(
@@ -3319,6 +3356,7 @@ root_agent = Agent(
     description="Reads research papers, extracts concepts, compares papers, and answers grounded questions.",
     static_instruction=_STATIC_INSTRUCTION,
     instruction=_dynamic_instruction,
+    before_model_callback=_dynamic_ctx.build_before_model_callback(),
     tools=[
         _safe_tool(list_papers),
         _safe_tool(rename_paper),
