@@ -2,6 +2,7 @@
 .venv/
 __pycache__/
 *.pyc
+.DS_Store
 knowledge_base/*.json
 user_model/*.json
 user_model/*.jsonl

@@ -40,6 +40,7 @@ def _read_pdf_pages(path: Path) -> list[dict[str, Any]]:
     pages: list[dict[str, Any]] = []
     ocr_attempted = False
     _ocr_available = False
+    _fitz_doc = None
 
     for index, page in enumerate(reader.pages, start=1):
         try:
@@ -64,6 +65,7 @@ def _read_pdf_pages(path: Path) -> list[dict[str, Any]]:
                             break
                     ocr_attempted = True
                     _ocr_available = True
+                    _fitz_doc = fitz.open(str(path))
                 except ImportError:
                     _ocr_available = False
                     ocr_attempted = True
@@ -71,14 +73,12 @@ def _read_pdf_pages(path: Path) -> list[dict[str, Any]]:
                     _ocr_available = False
                     ocr_attempted = True
 
-            if _ocr_available:
+            if _ocr_available and _fitz_doc is not None:
                 try:
-                    doc = fitz.open(str(path))
-                    page_obj = doc.load_page(index - 1)
+                    page_obj = _fitz_doc.load_page(index - 1)
                     pix = page_obj.get_pixmap(dpi=300)
                     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                     text = pytesseract.image_to_string(img)
-                    doc.close()
                 except Exception:
                     pass
 
@@ -86,6 +86,9 @@ def _read_pdf_pages(path: Path) -> list[dict[str, Any]]:
                 continue
 
         pages.append({"page": index, "text": text})
+
+    if _fitz_doc is not None:
+        _fitz_doc.close()
 
     return pages
 
@@ -291,8 +294,80 @@ def _load_records() -> list[dict[str, Any]]:
     return records
 
 
+def _invalidate_record_caches() -> None:
+    """Clear record and derived retrieval caches after knowledge-base writes."""
+    _load_records._cache = None  # type: ignore[attr-defined]
+    try:
+        from .retrieval import _clear_search_cache  # noqa: PLC0415
+
+        _clear_search_cache()
+    except Exception:
+        pass
+
+
 def _all_passages(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [p for r in records for p in r.get("passages", [])]
+
+
+def _coerce_positive_int(value: int, default: int, maximum: int) -> int:
+    """Clamp caller-provided limits to keep tool output bounded."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, min(parsed, maximum))
+
+
+def _truncate_text(text: str, limit: int = 180) -> str:
+    compact = re.sub(r"\s+", " ", str(text)).strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _compact_concepts(
+    concepts: list[dict[str, Any]],
+    limit: int,
+    include_citations: bool = True,
+) -> list[dict[str, Any]]:
+    compact = []
+    for concept in concepts[:limit]:
+        item = {
+            "name": concept.get("name", ""),
+        }
+        if include_citations:
+            item["citation"] = concept.get("citation")
+        compact.append(item)
+    return compact
+
+
+def _compact_evidence_items(items: list[dict[str, Any]], limit: int = 1) -> list[dict[str, Any]]:
+    return [
+        {
+            "citation": item.get("citation"),
+            "text": _truncate_text(item.get("text", "")),
+        }
+        for item in items[:limit]
+    ]
+
+
+def _brief_index_item(record: dict[str, Any]) -> dict[str, Any]:
+    """Return a tiny library-index row for all-paper brief calls."""
+    metadata = record.get("metadata", {})
+    concepts = record.get("notes", {}).get("concepts", [])
+    return {
+        "source": record["source"],
+        "title": metadata.get("title", record["source"]),
+        "year": metadata.get("year"),
+        "concept_count": len(concepts),
+        "passage_count": len(record.get("passages", [])),
+        "top_concepts": [c.get("name", "") for c in concepts[:5]],
+    }
+
+
+def _record_exists_for_paper(file_name: str) -> bool:
+    return _paper_record_path(PAPERS_DIR / file_name).exists()
+
 
 
 # ── Dependency inference ─────────────────────────────────────────────
@@ -462,7 +537,7 @@ def rename_paper(old_name: str, new_name: str) -> dict[str, Any]:
             "message": f"Concept-graph migration failed (file and KB rolled back): {exc}",
         }
 
-    _load_records._cache = None  # type: ignore[attr-defined]
+    _invalidate_record_caches()
     return {
         "status": "ok", "old_name": old_name, "new_name": new_name,
         "kb_record_migrated": kb_renamed,
@@ -520,7 +595,7 @@ def delete_paper(file_name: str, dry_run: bool = True) -> dict[str, Any]:
     except Exception as exc:
         errors.append(f"concept graph cleanup: {exc}")
 
-    _load_records._cache = None  # type: ignore[attr-defined]
+    _invalidate_record_caches()
 
     if errors:
         return {
@@ -567,7 +642,11 @@ def organize_papers(mapping: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def ingest_paper(file_name: str, evidence_scope: str = "") -> dict[str, Any]:
+def ingest_paper(
+    file_name: str,
+    evidence_scope: str = "",
+    infer_dependencies: bool = False,
+) -> dict[str, Any]:
     """Read one paper from papers/ and save metadata, concepts, notes, and cited passages."""
     from .retrieval import keywords  # noqa: PLC0415
 
@@ -597,7 +676,7 @@ def ingest_paper(file_name: str, evidence_scope: str = "") -> dict[str, Any]:
         record["evidence_scope"] = scopes
     output_path = _paper_record_path(path)
     output_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
-    _load_records._cache = None  # type: ignore[attr-defined]
+    _invalidate_record_caches()
 
     # Concept graph linking (best-effort).
     try:
@@ -623,10 +702,11 @@ def ingest_paper(file_name: str, evidence_scope: str = "") -> dict[str, Any]:
         pass
 
     prereq_count = 0
-    try:
-        prereq_count = _infer_dependencies(notes["concepts"], path.name)
-    except Exception:
-        pass
+    if infer_dependencies:
+        try:
+            prereq_count = _infer_dependencies(notes["concepts"], path.name)
+        except Exception:
+            pass
 
     return {
         "status": "ok", "source": path.name,
@@ -639,35 +719,58 @@ def ingest_paper(file_name: str, evidence_scope: str = "") -> dict[str, Any]:
     }
 
 
-def ingest_all_papers() -> dict[str, Any]:
-    """Ingest every supported paper in papers/; one bad file does not kill the batch."""
+def ingest_all_papers(
+    force: bool = False,
+    infer_dependencies: bool = False,
+) -> dict[str, Any]:
+    """Ingest supported papers; skip existing records unless force=True."""
     papers = list_papers()["papers"]
     results = []
     for name in papers:
         try:
-            results.append(ingest_paper(name))
+            if not force and _record_exists_for_paper(name):
+                results.append({"status": "skipped", "source": name, "reason": "already ingested"})
+                continue
+            results.append(ingest_paper(name, infer_dependencies=infer_dependencies))
         except Exception as exc:
             results.append({"status": "error", "source": name, "message": str(exc)})
-    return {"ingested": results, "count": len(results)}
+    return {
+        "ingested": results,
+        "count": len(results),
+        "ingested_count": sum(1 for r in results if r.get("status") == "ok"),
+        "skipped_count": sum(1 for r in results if r.get("status") == "skipped"),
+        "error_count": sum(1 for r in results if r.get("status") == "error"),
+    }
 
 
-def list_concepts() -> dict[str, Any]:
-    """List extracted concepts grouped by source paper."""
+def list_concepts(
+    concepts_per_source: int = 10,
+    include_keywords: bool = False,
+    include_citations: bool = False,
+) -> dict[str, Any]:
+    """List extracted concepts grouped by source paper, compact by default."""
+    concept_limit = _coerce_positive_int(concepts_per_source, 10, 40)
     records = _load_records()
     return {
         "sources": [
             {
                 "source": r["source"],
                 "title": r.get("metadata", {}).get("title", r["source"]),
-                "concepts": r.get("notes", {}).get("concepts", []),
-                "keywords": r.get("keywords", []),
+                "concept_count": len(r.get("notes", {}).get("concepts", [])),
+                "concepts": _compact_concepts(
+                    r.get("notes", {}).get("concepts", []),
+                    concept_limit,
+                    include_citations=include_citations,
+                ),
+                "keywords": r.get("keywords", [])[:12] if include_keywords else [],
+                "truncated": len(r.get("notes", {}).get("concepts", [])) > concept_limit,
             }
             for r in records
         ]
     }
 
 
-def paper_brief(source: str = "") -> dict[str, Any]:
+def paper_brief(source: str = "", detail: str = "compact") -> dict[str, Any]:
     """Return a compact source-grounded brief for one paper or all papers."""
     records = _load_records()
     if source:
@@ -676,16 +779,46 @@ def paper_brief(source: str = "") -> dict[str, Any]:
             if source.lower() in r["source"].lower()
             or source.lower() in r.get("metadata", {}).get("title", "").lower()
         ]
+    full_detail = detail.strip().lower() in {"full", "detailed", "verbose"}
+    if not source and not full_detail:
+        return {
+            "briefs": [_brief_index_item(record) for record in records],
+            "detail": "index",
+            "count": len(records),
+        }
     return {
         "briefs": [
             _try_annotate_brief({
                 "source": r["source"],
                 "metadata": r.get("metadata", {}),
-                "top_concepts": r.get("notes", {}).get("concepts", [])[:12],
-                "methods": r.get("notes", {}).get("methods", [])[:4],
-                "findings": r.get("notes", {}).get("findings", [])[:4],
-                "limitations": r.get("notes", {}).get("limitations", [])[:4],
-                "open_questions": r.get("notes", {}).get("open_questions", [])[:4],
+                "concept_count": len(r.get("notes", {}).get("concepts", [])),
+                "passage_count": len(r.get("passages", [])),
+                "top_concepts": (
+                    r.get("notes", {}).get("concepts", [])[:12]
+                    if full_detail
+                    else _compact_concepts(r.get("notes", {}).get("concepts", []), 6)
+                ),
+                "methods": (
+                    r.get("notes", {}).get("methods", [])[:4]
+                    if full_detail
+                    else _compact_evidence_items(r.get("notes", {}).get("methods", []), 1)
+                ),
+                "findings": (
+                    r.get("notes", {}).get("findings", [])[:4]
+                    if full_detail
+                    else _compact_evidence_items(r.get("notes", {}).get("findings", []), 1)
+                ),
+                "limitations": (
+                    r.get("notes", {}).get("limitations", [])[:4]
+                    if full_detail
+                    else _compact_evidence_items(r.get("notes", {}).get("limitations", []), 1)
+                ),
+                "open_questions": (
+                    r.get("notes", {}).get("open_questions", [])[:4]
+                    if full_detail
+                    else _compact_evidence_items(r.get("notes", {}).get("open_questions", []), 1)
+                ),
+                "detail": "full" if full_detail else "compact",
             })
             for r in records
         ]

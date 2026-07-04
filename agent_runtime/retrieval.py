@@ -79,6 +79,55 @@ def citation(source: str, page: int | None, passage_id: str) -> str:
 
 # ── Passage scoring ──────────────────────────────────────────────────
 
+_SEARCH_INDEX_CACHE: dict[
+    tuple[tuple[str, int, int, int], ...],
+    tuple[list[dict[str, Any]], Counter, list[Counter], list[str]],
+] = {}
+
+
+def _clear_search_cache() -> None:
+    """Clear cached retrieval indexes after knowledge-base writes."""
+    _SEARCH_INDEX_CACHE.clear()
+
+
+def _records_signature(records: list[dict[str, Any]]) -> tuple[tuple[str, int, int, int], ...]:
+    """Return a compact signature for the records used in a search."""
+    return tuple(
+        (
+            str(record.get("source", "")),
+            int(record.get("characters", 0) or 0),
+            int(record.get("page_count", 0) or 0),
+            len(record.get("passages", []) or []),
+        )
+        for record in records
+    )
+
+
+def _search_index(
+    records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], Counter, list[Counter], list[str]]:
+    """Build or reuse tokenized passages and document frequencies."""
+    signature = _records_signature(records)
+    cached = _SEARCH_INDEX_CACHE.get(signature)
+    if cached is not None:
+        return cached
+
+    passages = [p for r in records for p in r.get("passages", [])]
+    doc_freq: Counter = Counter()
+    passage_terms: list[Counter] = []
+    passage_text_lower: list[str] = []
+    for passage in passages:
+        text_lower = passage.get("text", "").lower()
+        terms = Counter(tokenize(text_lower))
+        passage_terms.append(terms)
+        passage_text_lower.append(text_lower)
+        for term in terms:
+            doc_freq[term] += 1
+
+    index = (passages, doc_freq, passage_terms, passage_text_lower)
+    _SEARCH_INDEX_CACHE[signature] = index
+    return index
+
 
 def score_passage(
     query_terms: list[str],
@@ -116,6 +165,37 @@ def score_passage(
     return round(score, 4)
 
 
+def _score_precomputed_passage(
+    query_terms: list[str],
+    query_phrase: str,
+    passage: dict[str, Any],
+    passage_terms: Counter,
+    text_lower: str,
+    document_count: int,
+    doc_freq: Counter,
+) -> float:
+    """Score a passage using cached tokenization."""
+    if not passage_terms:
+        return 0.0
+
+    score = 0.0
+    for term in query_terms:
+        tf = passage_terms.get(term, 0)
+        if not tf:
+            continue
+        idf = math.log((document_count + 1) / (doc_freq.get(term, 0) + 1)) + 1
+        score += (1 + math.log(tf)) * idf
+
+    if query_phrase and query_phrase in text_lower:
+        score += 3.0
+
+    for kw in passage.get("keywords", []):
+        if kw in query_terms:
+            score += 0.35
+
+    return round(score, 4)
+
+
 # ── Evidence search ──────────────────────────────────────────────────
 
 
@@ -131,7 +211,6 @@ def search_evidence(
     """
     # Lazy imports — avoid circular dependency with papers module.
     from research_paper_agent.agent_runtime.papers import (  # noqa: PLC0415
-        _all_passages,
         _filter_records_by_scope,
         _load_records,
     )
@@ -141,15 +220,20 @@ def search_evidence(
         return {"query": query, "evidence_scope": evidence_scope or None, "matches": []}
 
     records = _filter_records_by_scope(_load_records(), evidence_scope)
-    passages = _all_passages(records)
-    doc_freq: Counter = Counter()
-    for passage in passages:
-        for term in set(tokenize(passage["text"])):
-            doc_freq[term] += 1
+    passages, doc_freq, passage_terms, passage_text_lower = _search_index(records)
 
     matches = []
-    for passage in passages:
-        s = score_passage(query_terms, passage, len(passages), doc_freq)
+    query_phrase = " ".join(query_terms)
+    for index, passage in enumerate(passages):
+        s = _score_precomputed_passage(
+            query_terms,
+            query_phrase,
+            passage,
+            passage_terms[index],
+            passage_text_lower[index],
+            len(passages),
+            doc_freq,
+        )
         if s > 0:
             matches.append({
                 "source": passage["source"],

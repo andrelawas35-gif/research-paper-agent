@@ -301,6 +301,43 @@ class TestIngestAllPapers:
         result = ingest_all_papers()
         assert result["count"] == 0
 
+    def test_skips_existing_records_by_default(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent import ingest_all_papers, ingest_paper
+
+        (agent.PAPERS_DIR / "already.txt").write_text(
+            "This paper has enough text to create a reusable passage for ingestion. "
+            "It discusses local tools, caching, and ingestion performance.",
+            encoding="utf-8",
+        )
+        first = ingest_paper("already.txt")
+        assert first["status"] == "ok"
+
+        second = ingest_all_papers()
+
+        assert second["count"] == 1
+        assert second["ingested_count"] == 0
+        assert second["skipped_count"] == 1
+        assert second["ingested"][0]["status"] == "skipped"
+
+    def test_force_reingests_existing_records(self):
+        from research_paper_agent import agent
+        from research_paper_agent.agent import ingest_all_papers, ingest_paper
+
+        (agent.PAPERS_DIR / "force.txt").write_text(
+            "This paper has enough text to create a reusable passage for ingestion. "
+            "It discusses local tools, caching, and ingestion performance.",
+            encoding="utf-8",
+        )
+        first = ingest_paper("force.txt")
+        assert first["status"] == "ok"
+
+        second = ingest_all_papers(force=True)
+
+        assert second["count"] == 1
+        assert second["ingested_count"] == 1
+        assert second["skipped_count"] == 0
+
 
 class TestIngestEvidenceScope:
     def test_ingest_paper_stores_explicit_evidence_scope(self):
@@ -461,6 +498,9 @@ class TestBudgetInference:
         ("comprehensive analysis", "deep"),
         ("in-depth explanation", "deep"),
         ("take your time", "deep"),
+        ("ingest all papers", "deep"),
+        ("read the papers folder", "deep"),
+        ("scan all documents", "deep"),
     ])
     def test_explicit_wording_wins(self, text, expected):
         from research_paper_agent.agent_runtime.dynamic_context import (
@@ -1016,8 +1056,11 @@ class TestToolGroups:
         balanced = _allowed_tool_names("balanced")
         assert "search_evidence" in balanced
         assert "save_personal_note" in balanced
-        # Heavy tools excluded.
-        assert "ingest_paper" not in balanced
+        # Explicit ingestion must be available without fragile budget inference.
+        assert "ingest_paper" in balanced
+        assert "ingest_all_papers" in balanced
+        assert "rename_paper" in balanced
+        assert "organize_papers" in balanced
         assert "adaptive_grill" not in balanced
 
     def test_deep_includes_everything(self):

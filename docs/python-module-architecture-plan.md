@@ -2,6 +2,14 @@
 
 This plan explains how to split the Python implementation into deeper modules without turning the codebase into a pile of thin pass-through files. It should be implemented after or alongside the first Performance Budget slice from `docs/performance-budget-implementation-plan.md`.
 
+## Status (2026-07-04)
+
+All five phases below are implemented. `agent.py` is now a composition module (~1120 lines, down from 3367) containing imports, the static instruction body, thin tool adapters, tool-list composition, and `root_agent` construction. Every `agent_runtime/` module listed under Target Shape exists and owns its implementation; `agent.py` imports each public/private name once and reassigns it at module level (e.g. `search_web = _ws_search_web`) rather than keeping a duplicate local definition.
+
+A cleanup pass on 2026-07-04 removed nine leftover duplicate function bodies in `agent.py` (tutor and grill helpers) that had been redefined locally *after* their `agent_runtime` reassignment, silently shadowing the extracted implementation — tests passed either way because the duplicates were behaviorally identical, but the extraction was cosmetic for those two modules until the duplicates were deleted.
+
+That same pass also fixed a test-isolation gap: `agent_runtime/tutor.py`, `grill.py`, and `audit.py` each bind their own copy of path constants via `from .paths import X` at import time, so `tests/conftest.py` patching `agent.py`'s or `paths.py`'s copy did not redirect these modules — tests were silently reading/writing the real `user_model/` directory. `conftest.py` now patches every `agent_runtime` submodule's own bound path constants directly.
+
 ## Current Shape
 
 `agent.py` is too large because it combines many unrelated modules behind one giant interface. At the time this plan was written, it was 3367 lines and included paper ingestion, evidence retrieval, user profile learning, session metadata, note wrappers, relationship wrappers, web search, self-audit, adaptive grill, tutor mode, dynamic instructions, LLM setup, and root agent wiring.

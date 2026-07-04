@@ -69,6 +69,8 @@ _DEEP_PATTERNS: list[str] = [
     r"\bin[- ]depth\b",
     r"\btake\s+your\s+time\b",
     r"\bno\s+rush\b",
+    r"\b(ingest|import)\s+(all\s+)?(papers|documents|files)\b",
+    r"\b(read|scan)\s+(all\s+)?(papers|documents|files|the\s+folder|papers\s+folder|the\s+papers\s+folder)\b",
 ]
 
 # ── Mode hints that suggest a budget tier ────────────────────────────
@@ -621,6 +623,8 @@ _FAST_TOOLS: frozenset[str] = frozenset({
 
 # Safe: moderate-latency — search, evidence, recommendations.
 _SAFE_TOOLS: frozenset[str] = frozenset({
+    "ingest_paper", "ingest_all_papers",
+    "rename_paper", "organize_papers",
     "search_evidence", "search_personal_notes",
     "search_people", "search_web",
     "compare_papers", "make_study_guide",

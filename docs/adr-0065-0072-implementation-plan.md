@@ -1,7 +1,7 @@
 # ADR 0065-0072 Implementation Plan
 
 **Created:** 2026-07-03
-**Status:** In Progress
+**Status:** Complete (verified 2026-07-04) — all ADRs 0065-0072 implemented and covered by tests.
 
 Integrates the Python Module Architecture Plan with the Performance Budget
 Implementation Plan and verified gaps in ADRs 0066 and 0070.
