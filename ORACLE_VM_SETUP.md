@@ -49,9 +49,9 @@ Deploy your Research Paper Agent to an always-free Oracle Cloud VM and chat with
 3. Right-click your username in any chat → **Copy User ID**
 4. Save this — you'll need it for `.env`
 
-### 2.4 Invite the Bot (do this AFTER deployment)
+### 2.4 Invite the Bot
 
-See [Section 6](#6-invite-the-bot-to-your-discord-server). You need the VM's public IP first to configure OAuth2 redirect.
+See [Section 6](#6-invite-the-bot-to-your-discord-server). A standard bot invite does not require an OAuth2 redirect URL or the VM's public IP.
 
 ---
 
@@ -86,9 +86,10 @@ Once the instance is running:
    | Source Type | Source CIDR | IP Protocol | Dest Port | Description |
    |---|---|---|---|---|
    | CIDR | `0.0.0.0/0` | TCP | 22 | SSH |
-   | CIDR | `0.0.0.0/0` | TCP | 8000 | ADK Web UI (optional) |
 
 5. Click **Add Ingress Rules**
+
+The Discord bot uses an outbound connection, so it does not need an inbound application port. Keep the ADK Web UI private; use an SSH tunnel if you later run it on the VM.
 
 ### 3.3 Find Your Public IP
 
@@ -292,7 +293,7 @@ research_paper_agent/.venv/bin/adk web research_paper_agent --port 8000
 
 Then open `http://localhost:8000` — your Discord chats appear under the "user" namespace.
 
-> **Note:** This requires `session_management_across_device=True` (already set in `discord_bot.py`). The VM and your Mac share the same SQLite DB path structure, so sessions are readable from either side.
+> **Note:** This only shows the same conversations when the Web UI and Discord bot use the same SQLite database. A bot running on the VM and a Web UI running on your Mac have separate database files by default. Run the Web UI on the VM and access it through an SSH tunnel if you need shared history.
 
 ---
 

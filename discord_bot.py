@@ -20,7 +20,7 @@ PROJECT_DIR = Path(__file__).resolve().parent
 load_dotenv(PROJECT_DIR / ".env")
 
 from adk_connectors.discord import DiscordConnector  # noqa: E402
-from agent import root_agent  # noqa: E402 — must follow .env load
+from .agent import root_agent  # noqa: E402 — must follow .env load
 
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")

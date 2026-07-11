@@ -49,12 +49,17 @@ ok "SSH connection works"
 say "=== Step 2: Copy project files to VM ==="
 ${SSH} "mkdir -p ${REMOTE_BASE}/${PROJECT_NAME}"
 # Use rsync if available, fall back to scp.
-if command -v rsync &>/dev/null; then
+if command -v rsync &>/dev/null && ${SSH} "command -v rsync" &>/dev/null; then
     rsync -avz --delete \
         --exclude '.venv' \
+        --exclude 'venv' \
         --exclude '.adk' \
+        --exclude '.pytest_cache' \
+        --exclude '.claude' \
+        --exclude '.vscode' \
         --exclude '__pycache__' \
         --exclude '*.pyc' \
+        --exclude '.DS_Store' \
         --exclude '.git' \
         --exclude 'logs' \
         --exclude 'backups' \
@@ -64,8 +69,10 @@ if command -v rsync &>/dev/null; then
 else
     warn "rsync not found; using scp (slower)"
     tar czf /tmp/research_paper_agent_deploy.tar.gz \
-        --exclude='.venv' --exclude='.adk' --exclude='__pycache__' \
-        --exclude='*.pyc' --exclude='.git' --exclude='logs' --exclude='.env' \
+        --exclude='.venv' --exclude='venv' --exclude='.adk' \
+        --exclude='.pytest_cache' --exclude='.claude' --exclude='.vscode' \
+        --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' \
+        --exclude='.git' --exclude='logs' --exclude='.env' \
         -C "$(dirname "$PROJECT_DIR")" "$PROJECT_NAME"
     ${SCP} /tmp/research_paper_agent_deploy.tar.gz "${SSH_USER}@${VM_IP}:/tmp/"
     ${SSH} "tar xzf /tmp/research_paper_agent_deploy.tar.gz -C ${REMOTE_BASE} && rm /tmp/research_paper_agent_deploy.tar.gz"
@@ -93,6 +100,9 @@ if ! command -v python3 &>/dev/null || [ "$(python3 -c 'import sys; print(sys.ve
 fi
 
 # Tesseract (for OCR fallback on scanned PDFs)
+sudo apt-get install -y -qq python3-venv
+sudo apt-get install -y -qq cron
+sudo systemctl enable --now cron
 sudo apt-get install -y -qq tesseract-ocr || echo "Tesseract skipped (non-essential)"
 
 echo "System dependencies OK"
@@ -112,7 +122,7 @@ ${SSH} "cd ${REMOTE_BASE}/${PROJECT_NAME} && [ -f .env ] || cp .env.example .env
 
 # Check if essential env vars are still placeholders.
 NEEDS_DEEPSEEK=$(${SSH} "grep -q 'your_deepseek_api_key' ${REMOTE_BASE}/${PROJECT_NAME}/.env && echo 1 || echo 0" || echo "1")
-NEEDS_DISCORD=$(${SSH} "grep -q 'DISCORD_BOT_TOKEN' ${REMOTE_BASE}/${PROJECT_NAME}/.env && echo 0 || echo 1" || echo "1")
+NEEDS_DISCORD=$(${SSH} "grep -Eq '^DISCORD_BOT_TOKEN=([^[:space:]]+)$' ${REMOTE_BASE}/${PROJECT_NAME}/.env && ! grep -q '^DISCORD_BOT_TOKEN=your_discord_bot_token$' ${REMOTE_BASE}/${PROJECT_NAME}/.env && echo 0 || echo 1" || echo "1")
 
 if [ "$NEEDS_DEEPSEEK" = "1" ] || [ "$NEEDS_DISCORD" = "1" ]; then
     warn ".env needs your API keys."
@@ -140,7 +150,7 @@ ok "Log directory created"
 
 # -----------------------------------------------------------------------
 say "=== Step 7: Install systemd service ==="
-${SSH} "sudo cp ${REMOTE_BASE}/${PROJECT_NAME}/research-agent.service /etc/systemd/system/"
+${SSH} "sed -e 's|^User=.*|User=${SSH_USER}|' -e 's|^WorkingDirectory=.*|WorkingDirectory=${REMOTE_BASE}|' -e 's|/home/ubuntu/research_paper_agent|${REMOTE_BASE}/${PROJECT_NAME}|g' -e 's|research_paper_agent\.discord_bot|${PROJECT_NAME}.discord_bot|' ${REMOTE_BASE}/${PROJECT_NAME}/research-agent.service > /tmp/research-agent.service && sudo mv /tmp/research-agent.service /etc/systemd/system/research-agent.service"
 ${SSH} "sudo systemctl daemon-reload"
 ${SSH} "sudo systemctl enable research-agent"
 ok "systemd service installed and enabled"
@@ -154,6 +164,12 @@ ok "Daily backup cron installed (3 AM UTC, keeps 7 days)"
 
 # -----------------------------------------------------------------------
 say "=== Step 9: Start the service ==="
+if [ "$NEEDS_DEEPSEEK" = "1" ] || [ "$NEEDS_DISCORD" = "1" ]; then
+    warn "Service was installed but not started because required credentials are missing."
+    echo "    Edit ${REMOTE_BASE}/${PROJECT_NAME}/.env, then run:"
+    echo "    ssh ${SSH_USER}@${VM_IP} 'sudo systemctl restart research-agent'"
+    exit 0
+fi
 ${SSH} "sudo systemctl restart research-agent"
 sleep 3
 STATUS=$(${SSH} "sudo systemctl is-active research-agent" || echo "inactive")
