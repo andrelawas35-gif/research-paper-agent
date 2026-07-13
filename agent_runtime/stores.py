@@ -19,10 +19,16 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set
 
 from .event_envelope import Domain, EventEnvelope, EventStore, Sensitivity
+
+
+def _data_path(*parts: str) -> Path:
+    """Resolve production data outside the release directory when configured."""
+    return Path(os.getenv("PKM_DATA_DIR", "data")).joinpath(*parts)
 
 # ── Repository interface ─────────────────────────────────────────────
 
@@ -67,7 +73,7 @@ class OperationalStore(Repository):
     _store: EventStore = field(init=False)
 
     def __post_init__(self) -> None:
-        self._store = EventStore(Path("data/operational/events.jsonl"))
+        self._store = EventStore(_data_path("operational", "events.jsonl"))
 
     def set_path(self, path: Path) -> None:
         """Override the store path (for testing)."""
@@ -101,7 +107,7 @@ class GeneralPKMStore(Repository):
     _store: EventStore = field(init=False)
 
     def __post_init__(self) -> None:
-        self._store = EventStore(Path("data/general_pkm/events.jsonl"))
+        self._store = EventStore(_data_path("general_pkm", "events.jsonl"))
 
     def set_path(self, path: Path) -> None:
         self._store = EventStore(path)
@@ -139,7 +145,7 @@ class RegulationStore(Repository):
     _store: EventStore = field(init=False)
 
     def __post_init__(self) -> None:
-        self._store = EventStore(Path("data/regulation/events.jsonl"))
+        self._store = EventStore(_data_path("regulation", "events.jsonl"))
 
     def set_path(self, path: Path) -> None:
         self._store = EventStore(path)

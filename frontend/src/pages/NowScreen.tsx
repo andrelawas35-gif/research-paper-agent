@@ -1,19 +1,61 @@
-import { Surface, Row } from '../components/Surface';
+import { Surface } from '../components/Surface';
 import { Button } from '../components/Button';
-import { StatusNotice } from '../components/StatusNotice';
 import { Dialog } from '../components/Dialog';
 import { AppNav } from '../components/Navigation';
 import { useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import * as api from '../api/client';
+import type { SessionSummary } from '../api/client';
 
-interface NowScreenProps {
-  offline: boolean;
-  degraded: boolean;
-}
-
-export function NowScreen({ offline, degraded }: NowScreenProps) {
+export function NowScreen() {
   const navigate = useNavigate();
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [draft, setDraft] = useState<SessionSummary | null>(null);
+  const [discardError, setDiscardError] = useState('');
+  const [discarding, setDiscarding] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void api.sessions
+      .list()
+      .then(({ sessions }) => {
+        if (cancelled) return;
+        const unfinishedDraft = sessions.find(
+          (candidate) =>
+            candidate.is_private &&
+            candidate.completed_at === null &&
+            candidate.state !== 'expired' &&
+            candidate.state !== 'completed',
+        );
+        setDraft(unfinishedDraft ?? null);
+      })
+      .catch(() => {
+        // A draft is optional orientation data. Do not imply one exists when
+        // the authenticated backend cannot confirm it.
+        if (!cancelled) setDraft(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const discardDraft = async () => {
+    if (!draft) return;
+    setDiscarding(true);
+    setDiscardError('');
+    try {
+      await api.sessions.expire(draft.session_id);
+      setDraft(null);
+      setDiscardOpen(false);
+    } catch (error) {
+      const apiError = error as api.ApiError;
+      setDiscardError(apiError.detail || 'The draft could not be discarded.');
+    } finally {
+      setDiscarding(false);
+    }
+  };
 
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const date = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
@@ -34,9 +76,17 @@ export function NowScreen({ offline, degraded }: NowScreenProps) {
           <time className="text-2xl font-bold text-ink">{time}</time>
           <p className="text-sm text-muted">{date}</p>
         </div>
-        <div className="w-10 h-10 rounded-full bg-action-soft flex items-center justify-center text-action font-bold text-lg" aria-label="Profile">
+        <button
+          type="button"
+          className="w-10 h-10 rounded-full bg-action-soft flex items-center justify-center text-action font-bold text-lg"
+          aria-label="Lock workspace"
+          onClick={() => {
+            api.clearApiKey();
+            window.location.reload();
+          }}
+        >
           P
-        </div>
+        </button>
       </header>
 
       {/* ── What Matters Today ─────────────────────────────────── */}
@@ -67,58 +117,38 @@ export function NowScreen({ offline, degraded }: NowScreenProps) {
       </button>
 
       {/* ── Private Regulation draft card ──────────────────────── */}
-      <Surface>
-        <p className="text-xs text-muted uppercase tracking-wide mb-2">Unfinished session</p>
-        <div className="flex flex-col gap-3">
-          <div>
-            <p className="text-sm font-semibold">Private draft available</p>
-            <p className="text-xs text-muted">Saved earlier today</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => navigate('/regulation')}>
-              Resume
-            </Button>
-            <Button variant="tertiary" onClick={() => navigate('/regulation?action=retention')}>
-              Change retention
-            </Button>
-            <Button variant="tertiary" onClick={() => setDiscardOpen(true)}>
-              Discard
-            </Button>
-          </div>
-        </div>
-      </Surface>
+      {draft && (
+        <>
+          <Surface>
+            <p className="text-xs text-muted uppercase tracking-wide mb-2">Unfinished session</p>
+            <div className="flex flex-col gap-3">
+              <div>
+                <p className="text-sm font-semibold">Private draft available</p>
+                <p className="text-xs text-muted">Memory-only · Not saved to durable history</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" onClick={() => navigate(`/regulation?session=${draft.session_id}`)}>
+                  Resume
+                </Button>
+                <Button variant="tertiary" onClick={() => setDiscardOpen(true)}>
+                  Discard
+                </Button>
+              </div>
+              {discardError && <p className="text-sm text-danger" role="alert">{discardError}</p>}
+            </div>
+          </Surface>
 
-      <Dialog
-        open={discardOpen}
-        onConfirm={() => { setDiscardOpen(false); /* TODO: call session.expire */ }}
-        onCancel={() => setDiscardOpen(false)}
-        title="Discard draft?"
-        confirmLabel="Discard"
-        destructive
-      >
-        This will permanently remove the unfinished Regulation session. You can start a new one at any time.
-      </Dialog>
-
-      {/* ── Action rows ────────────────────────────────────────── */}
-      <Surface>
-        <Row label="Capture a thought">
-          <Button variant="tertiary">→</Button>
-        </Row>
-        <Row label="Continue work">
-          <Button variant="tertiary">→</Button>
-        </Row>
-        <Row label="Study">
-          <Button variant="tertiary">→</Button>
-        </Row>
-      </Surface>
-
-      {/* ── Capability notice ──────────────────────────────────── */}
-      {(offline || degraded) && (
-        <StatusNotice variant={offline ? 'caution' : 'capability'}>
-          {offline
-            ? 'Offline — local protocols and safety resources are available.'
-            : 'Model assistance paused — local protocol available.'}
-        </StatusNotice>
+          <Dialog
+            open={discardOpen}
+            onConfirm={discardDraft}
+            onCancel={() => setDiscardOpen(false)}
+            title="Discard draft?"
+            confirmLabel={discarding ? 'Discarding…' : 'Discard'}
+            destructive
+          >
+            This removes the memory-only Regulation session. You can start a new one at any time.
+          </Dialog>
+        </>
       )}
 
       {/* ── Privacy link ───────────────────────────────────────── */}

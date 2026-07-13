@@ -1,0 +1,15 @@
+[Unit]
+Description=Encrypted off-VM PKM backup
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/pkm/backup.env
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/pkm/backup.env
+ExecStart=/opt/pkm/current/backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+NoNewPrivileges=true

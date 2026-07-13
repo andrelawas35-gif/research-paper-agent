@@ -16,9 +16,9 @@ Provides REST endpoints for the guided PWA Regulation flow:
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .emotional_regulation import (
@@ -62,6 +62,9 @@ from .model_provider import (
 )
 from .stores import RegulationStore, StoreRegistry
 
+if TYPE_CHECKING:
+    from .regulation_persistence import EncryptedRegulationPersistence
+
 # ═══════════════════════════════════════════════════════════════════════
 # Constants
 # ═══════════════════════════════════════════════════════════════════════
@@ -87,6 +90,8 @@ def create_regulation_router(
     system_prompt: Optional[str] = None,
     sessions_dict: Optional[Dict[str, TriggerSession]] = None,
     rules_dict: Optional[Dict[str, PersonalRegulationRule]] = None,
+    persistence: Optional["EncryptedRegulationPersistence"] = None,
+    auth_dependency: Any = None,
 ) -> APIRouter:
     """Create the Regulation API router.
 
@@ -103,11 +108,29 @@ def create_regulation_router(
     Returns:
         Configured APIRouter with all Regulation endpoints.
     """
-    router = APIRouter(prefix="/api/regulation", tags=["regulation"])
+    dependencies = [Depends(auth_dependency)] if auth_dependency is not None else []
+    router = APIRouter(
+        prefix="/api/regulation", tags=["regulation"], dependencies=dependencies
+    )
     _provider = model_provider or FakeProvider()
     _system_prompt = system_prompt or _default_system_prompt()
     _sessions: Dict[str, TriggerSession] = sessions_dict if sessions_dict is not None else {}
     _rules: Dict[str, PersonalRegulationRule] = rules_dict if rules_dict is not None else {}
+
+    if persistence is not None:
+        durable_sessions, durable_rules = persistence.load()
+        _sessions.update(durable_sessions)
+        _rules.update(durable_rules)
+
+    def _put_session(session: TriggerSession) -> None:
+        _sessions[session.session_id] = session
+        if persistence is not None:
+            persistence.save_session(session)
+
+    def _put_rule(rule: PersonalRegulationRule) -> None:
+        _rules[rule.rule_id] = rule
+        if persistence is not None:
+            persistence.save_rule(rule)
 
     # Pre-populate default safety rules
     for rule_text in DEFAULT_SAFETY_RULES:
@@ -149,7 +172,7 @@ def create_regulation_router(
         # Begin safety screen immediately
         session = begin_safety_screen(session)
 
-        _sessions[session.session_id] = session
+        _put_session(session)
 
         return {
             "session_id": session.session_id,
@@ -197,9 +220,13 @@ def create_regulation_router(
                 detail=f"Cannot expire session in state {session.state.value}",
             )
 
+        if session.is_private:
+            del _sessions[session_id]
+            return {"session_id": session_id, "state": SessionState.EXPIRED.value}
+
         from .emotional_regulation import _transition
         session = _transition(session, SessionState.EXPIRED)
-        _sessions[session_id] = session
+        _put_session(session)
 
         return {"session_id": session_id, "state": session.state.value}
 
@@ -236,7 +263,7 @@ def create_regulation_router(
         except RegulationStateError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        _sessions[session_id] = session
+        _put_session(session)
 
         return {
             "session_id": session_id,
@@ -297,7 +324,7 @@ def create_regulation_router(
         except RegulationStateError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        _sessions[session_id] = session
+        _put_session(session)
         return _session_to_dict(session)
 
     @router.post("/sessions/{session_id}/interpretations")
@@ -325,7 +352,7 @@ def create_regulation_router(
         except RegulationStateError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        _sessions[session_id] = session
+        _put_session(session)
         return _session_to_dict(session)
 
     @router.post("/sessions/{session_id}/emotions")
@@ -357,7 +384,7 @@ def create_regulation_router(
         except RegulationStateError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        _sessions[session_id] = session
+        _put_session(session)
         return _session_to_dict(session)
 
     @router.post("/sessions/{session_id}/urges")
@@ -381,7 +408,7 @@ def create_regulation_router(
         except RegulationStateError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        _sessions[session_id] = session
+        _put_session(session)
         return _session_to_dict(session)
 
     @router.post("/sessions/{session_id}/actions")
@@ -408,7 +435,7 @@ def create_regulation_router(
         from .emotional_regulation import _new_version
         session = _new_version(session, actions=new_actions)
 
-        _sessions[session_id] = session
+        _put_session(session)
         return _session_to_dict(session)
 
     @router.post("/sessions/{session_id}/outcomes")
@@ -440,7 +467,7 @@ def create_regulation_router(
         from .emotional_regulation import _new_version
         session = _new_version(session, outcomes=new_outcomes)
 
-        _sessions[session_id] = session
+        _put_session(session)
         return _session_to_dict(session)
 
     # ── Complete session ─────────────────────────────────────────────
@@ -485,7 +512,7 @@ def create_regulation_router(
         except RegulationStateError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        _sessions[session_id] = session
+        _put_session(session)
 
         return {"session_id": session_id, "state": session.state.value}
 
@@ -529,7 +556,7 @@ def create_regulation_router(
 
         # Update in-memory session
         if result.session:
-            _sessions[session_id] = result.session
+            _put_session(result.session)
 
         return {
             "session_id": session_id,
@@ -667,7 +694,7 @@ def create_regulation_router(
             exceptions=exceptions,
         )
 
-        _rules[rule.rule_id] = rule
+        _put_rule(rule)
 
         return {
             "rule_id": rule.rule_id,
@@ -695,7 +722,7 @@ def create_regulation_router(
             created_at=rule.created_at,
             updated_at=_reg_now(),
         )
-        _rules[rule_id] = new_rule
+        _put_rule(new_rule)
 
         return {
             "rule_id": new_rule.rule_id,
@@ -731,7 +758,7 @@ def create_regulation_router(
             created_at=rule.created_at,
             updated_at=_reg_now(),
         )
-        _rules[rule_id] = new_rule
+        _put_rule(new_rule)
 
         return {"rule_id": rule_id, "confirmation": "retired"}
 

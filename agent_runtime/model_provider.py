@@ -296,13 +296,23 @@ class OpenAIProvider(ModelProvider):
         default_factory=lambda: os.getenv("OPENAI_BASE_URL")
     )
     budget: SpendBudget = field(default_factory=SpendBudget)
-    gpt5_mini_id: str = "gpt-5-mini"
-    gpt5_id: str = "gpt-5"
+    gpt5_mini_id: str = field(
+        default_factory=lambda: os.getenv("OPENAI_GPT5_MINI_MODEL", "gpt-5-mini")
+    )
+    gpt5_id: str = field(
+        default_factory=lambda: os.getenv("OPENAI_GPT5_MODEL", "gpt-5")
+    )
 
     _client: Any = field(init=False, default=None)
     _usage: List[UsageRecord] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
+        if not self.api_key:
+            # Model access is optional in production. A missing credential is
+            # represented as an unavailable provider so Regulation can use its
+            # deterministic degradation path instead of failing startup.
+            self._client = None
+            return
         try:
             from openai import AsyncOpenAI
             kwargs: dict[str, Any] = {"api_key": self.api_key}

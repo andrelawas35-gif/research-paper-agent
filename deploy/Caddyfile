@@ -1,0 +1,26 @@
+:8080 {
+	bind 127.0.0.1
+	encode zstd gzip
+
+	header {
+		Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; font-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+	}
+
+	@backend path /api/* /health /health/*
+	handle @backend {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	@mutable path /sw.js /registerSW.js /manifest.webmanifest /index.html
+	header @mutable Cache-Control "no-cache"
+
+	handle {
+		root * /opt/pkm/current/frontend/dist
+		try_files {path} /index.html
+		file_server
+	}
+}

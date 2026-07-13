@@ -1,0 +1,33 @@
+[Unit]
+Description=Personal Knowledge Manager API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pkm
+Group=pkm
+WorkingDirectory=/opt/pkm/current
+EnvironmentFile=/etc/pkm/pkm.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/pkm/current/.venv/bin/uvicorn agent_runtime.asgi:create_production_app --factory --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths=/var/lib/pkm
+
+[Install]
+WantedBy=multi-user.target

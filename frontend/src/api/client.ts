@@ -130,18 +130,36 @@ export interface PrivacyExportResult {
 }
 
 function getApiKey(): string {
-  // In production, this would come from secure storage or an auth flow.
-  // For the PWA, it's stored in localStorage after first authentication.
-  return localStorage.getItem('pkm_api_key') || '';
+  return sessionStorage.getItem('pkm_api_key') || '';
 }
 
 export function setApiKey(key: string): void {
-  localStorage.setItem('pkm_api_key', key);
+  clearApiKey();
+  sessionStorage.setItem('pkm_api_key', key);
 }
 
 export function clearApiKey(): void {
   localStorage.removeItem('pkm_api_key');
+  sessionStorage.removeItem('pkm_api_key');
 }
+
+export async function authenticate(key: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/me`, {
+    headers: { 'X-API-Key': key },
+  });
+  const body = await response.json().catch(() => null) as {
+    authenticated?: boolean;
+  } | null;
+  if (!response.ok || body?.authenticated !== true) {
+    throw {
+      status: response.status,
+      detail: response.status === 401 ? 'That access key was not accepted.' : 'Unable to verify access.',
+      correlationId: response.headers.get('x-request-id') || undefined,
+    } satisfies ApiError;
+  }
+}
+
+export const me = () => request<{ owner_id: string; authenticated: boolean }>('GET', '/me');
 
 export function isAuthenticated(): boolean {
   return !!getApiKey();

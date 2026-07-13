@@ -1,343 +1,173 @@
-# Oracle VM Setup Guide — Research Paper Agent + Discord Bot
+# Oracle VM Daily-Use Launch Runbook
 
-Deploy your Research Paper Agent to an always-free Oracle Cloud VM and chat with it from mobile Discord.
+This deploys one hardened Oracle VM as the PKM production candidate. It is a
+single-host deployment with restart recovery and encrypted off-VM backups; it
+does **not** claim high availability or emergency-service availability.
 
----
+## 1. VM baseline
 
-## Table of Contents
+- Ubuntu 24.04 LTS, ARM64
+- `VM.Standard.A1.Flex`
+- Recommended: 4 OCPU, 24 GB RAM, 47–100 GB boot volume
+- Oracle security list: inbound TCP 22 only
+- Do not open 80, 443, 8000, or 8080 publicly
 
-1. [Prerequisites](#1-prerequisites)
-2. [Create a Discord Bot](#2-create-a-discord-bot)
-3. [Create an Oracle VM](#3-create-an-oracle-vm)
-4. [SSH into Your VM](#4-ssh-into-your-vm)
-5. [Deploy the Agent](#5-deploy-the-agent)
-6. [Invite the Bot to Your Discord Server](#6-invite-the-bot-to-your-discord-server)
-7. [Test & Troubleshoot](#7-test--troubleshoot)
-8. [Daily Usage](#8-daily-usage)
+Resize the existing 1 OCPU / 6 GB A1 instance from **Compute → Instances →
+Stop → Edit → Shape → 4 OCPU / 24 GB → Save → Start**. Capacity can be
+temporarily unavailable; keeping the existing instance and retrying the resize
+is safer than deleting it.
 
----
+## 2. First deployment
 
-## 1. Prerequisites
-
-- An **Oracle Cloud account** (free tier — [sign up here](https://signup.cloud.oracle.com/))
-- A **DeepSeek API key** ([get one here](https://platform.deepseek.com/api_keys))
-- A **Discord account** with the mobile app installed
-- **Terminal** on your Mac (built-in)
-
----
-
-## 2. Create a Discord Bot
-
-### 2.1 Create the Application
-
-1. Go to [https://discord.com/developers/applications](https://discord.com/developers/applications)
-2. Click **New Application** → name it (e.g. "Research Agent")
-3. Click **Create**
-
-### 2.2 Configure the Bot
-
-1. In the left sidebar, click **Bot**
-2. Click **Reset Token** → copy the token (you won't see it again)
-3. Under **Privileged Gateway Intents**, enable:
-   - ✅ **Message Content Intent**
-4. Click **Save Changes**
-
-### 2.3 Get Your Discord User ID
-
-1. In Discord (desktop or mobile), go to **Settings → Advanced**
-2. Enable **Developer Mode**
-3. Right-click your username in any chat → **Copy User ID**
-4. Save this — you'll need it for `.env`
-
-### 2.4 Invite the Bot
-
-See [Section 6](#6-invite-the-bot-to-your-discord-server). A standard bot invite does not require an OAuth2 redirect URL or the VM's public IP.
-
----
-
-## 3. Create an Oracle VM
-
-### 3.1 Launch the Instance
-
-1. Log in to [Oracle Cloud Console](https://cloud.oracle.com/)
-2. Navigate to **Compute → Instances**
-3. Click **Create instance**
-4. Configure:
-   | Setting | Value |
-   |---|---|
-   | Name | `research-agent` |
-   | Placement | Leave default |
-   | Image | **Ubuntu 22.04** or **Ubuntu 24.04** |
-   | Shape | **VM.Standard.A1.Flex** (ARM, 4 OCPU, 24 GB) — always free |
-   | Boot volume | 50–100 GB (free up to 200 GB) |
-
-5. Under **Add SSH keys**, choose **Generate a key pair for me**
-   - This downloads `ssh-key-YYYY-MM-DD.zip` — **save it**
-6. Click **Create**
-
-### 3.2 Open Firewall Ports
-
-Once the instance is running:
-
-1. Click on your instance name
-2. Click **Attached VNICs** → click the VNIC name
-3. Click **Security Lists** → click the default security list
-4. Click **Add Ingress Rules**:
-   | Source Type | Source CIDR | IP Protocol | Dest Port | Description |
-   |---|---|---|---|---|
-   | CIDR | `0.0.0.0/0` | TCP | 22 | SSH |
-
-5. Click **Add Ingress Rules**
-
-The Discord bot uses an outbound connection, so it does not need an inbound application port. Keep the ADK Web UI private; use an SSH tunnel if you later run it on the VM.
-
-### 3.3 Find Your Public IP
-
-On the instance details page, copy the **Public IP address**.
-
----
-
-## 4. SSH into Your VM
-
-### 4.1 Extract the SSH Key
-
-Unzip the key file you downloaded:
+Generate the Regulation recovery key on your Mac, save it in your password
+manager, and provision the live copy before the first deployment:
 
 ```bash
-cd ~/Downloads
-unzip ssh-key-*.zip
-chmod 600 ssh-key-*.key
+umask 077
+openssl rand -hex 32 > /tmp/pkm-regulation.key
+scp /tmp/pkm-regulation.key ubuntu@<VM_PUBLIC_IP>:/tmp/pkm-regulation.key
+ssh ubuntu@<VM_PUBLIC_IP> 'sudo install -d -o root -g root -m 0750 /etc/pkm/keys && sudo install -o root -g root -m 0640 /tmp/pkm-regulation.key /etc/pkm/keys/regulation.key && rm /tmp/pkm-regulation.key'
+rm /tmp/pkm-regulation.key
 ```
 
-### 4.2 Connect
+From the Mac workspace:
 
 ```bash
-ssh -i ~/Downloads/ssh-key-YYYY-MM-DD.key ubuntu@<YOUR_VM_PUBLIC_IP>
+chmod +x deploy.sh backup.sh deploy/install-oracle-vm.sh deploy/verify-restic-restore.sh
+./deploy.sh <VM_PUBLIC_IP> ubuntu
 ```
 
-Replace `<YOUR_VM_PUBLIC_IP>` with the IP from step 3.3.
+The installer:
 
-### 4.3 (Optional) Set Up SSH Config for Convenience
+- requires Python 3.12+ (Ubuntu 24.04)
+- installs Node 24 LTS, which exceeds the frontend's Node 20.19 minimum
+- builds the PWA, then deletes `node_modules` from the release
+- binds FastAPI to `127.0.0.1:8000` and Caddy to `127.0.0.1:8080`
+- creates `/var/lib/pkm` for persistent data
+- requires a separately provisioned `/etc/pkm/keys/regulation.key`
+- generates and prints the owner access key once
+- keeps the newest three atomic releases
 
-On your Mac:
+Save the printed owner access key in a password manager. The VM stores only its
+SHA-256 hash. If it is lost, generate a new key and replace
+`PKM_API_KEY_HASH` in `/etc/pkm/pkm.env`.
 
-```bash
-mkdir -p ~/.ssh
-cp ~/Downloads/ssh-key-*.key ~/.ssh/oracle_vm.key
-chmod 600 ~/.ssh/oracle_vm.key
-```
-
-Add to `~/.ssh/config`:
-
-```
-Host oracle
-    HostName <YOUR_VM_PUBLIC_IP>
-    User ubuntu
-    IdentityFile ~/.ssh/oracle_vm.key
-```
-
-Then connect with just: `ssh oracle`
-
----
-
-## 5. Deploy the Agent
-
-From your Mac, run the deployment script:
-
-```bash
-cd /Users/andrelawas/Documents/Codex/2026-07-01/add/research_paper_agent
-chmod +x deploy.sh
-./deploy.sh <YOUR_VM_PUBLIC_IP>
-```
-
-This will:
-- Copy all project files to the VM
-- Install Python 3.11+ and system dependencies
-- Create a virtual environment and install packages
-- Prepare the `.env` file
-- Install and start the systemd service
-
-### 5.1 Configure Your API Keys
-
-After deployment, edit the `.env` file on the VM:
-
-```bash
-ssh oracle
-nano ~/research_paper_agent/.env
-```
-
-Fill in your actual keys:
-
-```ini
-DEEPSEEK_API_KEY=sk-your-actual-deepseek-key
-DISCORD_BOT_TOKEN=MTE-your-actual-discord-bot-token
-DISCORD_USER_ID=123456789012345678
-```
-
-Save (`Ctrl+O`, `Enter`, `Ctrl+X`) then restart:
-
-```bash
-sudo systemctl restart research-agent
-```
-
----
-
-## 6. Invite the Bot to Your Discord Server
-
-1. Go back to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Select your bot application
-3. In the left sidebar, click **OAuth2**
-4. Under **OAuth2 URL Generator**, check:
-   - ✅ **bot**
-5. Under **Bot Permissions**, check:
-   - ✅ **Send Messages**
-   - ✅ **Read Messages/View Channels**
-   - ✅ **Read Message History**
-   - ✅ **Use Slash Commands**
-6. Copy the generated URL (at the bottom of the page)
-7. Open that URL in your browser → select your Discord server → **Authorize**
-
-The bot will appear offline until the VM service starts successfully.
-
-### 6.1 Check the Bot is Online
+## 3. Configure GPT
 
 On the VM:
 
 ```bash
-sudo systemctl status research-agent
+sudoedit /etc/pkm/pkm.env
 ```
 
-You should see `active (running)`. If not:
+Set:
+
+```ini
+OPENAI_API_KEY=sk-...
+OPENAI_GPT5_MINI_MODEL=gpt-5-mini
+OPENAI_GPT5_MODEL=gpt-5
+```
+
+Then:
 
 ```bash
-sudo journalctl -u research-agent -n 30 --no-pager
+sudo systemctl restart pkm-api
+curl -fsS http://127.0.0.1:8080/health/ready
 ```
 
----
+Without an OpenAI key, the API still starts and Regulation uses its
+deterministic degradation protocol.
 
-## 7. Test & Troubleshoot
+## 4. Private HTTPS with Tailscale
 
-### 7.1 Quick Smoke Test
-
-In any Discord channel the bot can see, @mention it:
-
-```
-@Research Agent help
-```
-
-Or DM the bot directly. It should respond with the agent's greeting.
-
-### 7.2 Useful VM Commands
+Install Tailscale using its current official Linux instructions, then:
 
 ```bash
-# Check if the bot is running
-sudo systemctl status research-agent
-
-# View live logs
-tail -f ~/research_paper_agent/logs/bot.log
-
-# View error logs
-tail -f ~/research_paper_agent/logs/bot_error.log
-
-# Restart after config changes
-sudo systemctl restart research-agent
-
-# Stop the bot
-sudo systemctl stop research-agent
-
-# View full journal
-sudo journalctl -u research-agent -n 50 --no-pager
-
-# Manually trigger a backup
-~/research_paper_agent/backup.sh
-
-# List backups
-ls -la ~/research_paper_agent/backups/
+sudo tailscale up --ssh
+sudo tailscale serve --bg --yes --https=443 http://127.0.0.1:8080
+tailscale serve status
 ```
 
-### 7.3 Backups
+Open the reported `https://<machine>.<tailnet>.ts.net` URL on your phone or
+Mac while signed into your tailnet. Tailscale terminates HTTPS with an
+automatically provisioned certificate; Caddy and FastAPI remain loopback-only.
+Do not use Funnel for this private application.
 
-The deploy script sets up a **daily cron job** that backs up `knowledge_base/` and `user_model/` at 3 AM UTC. It keeps the 7 most recent snapshots.
+## 5. Encrypted off-VM recovery
+
+Restic encrypts the repository. Use a storage account outside this VM; a
+separate provider/account gives better recovery isolation.
+
+Create a password file that is **not** included in the backup:
 
 ```bash
-# Check backup log
-tail ~/research_paper_agent/logs/backup.log
-
-# Restore from a backup
-cd ~/research_paper_agent
-tar xzf backups/agent-data-YYYY-MM-DD.tar.gz
-sudo systemctl restart research-agent
+sudo install -d -m 0700 /root/.config/pkm
+sudo sh -c 'openssl rand -base64 48 > /root/.config/pkm/restic-password'
+sudo chmod 0600 /root/.config/pkm/restic-password
+sudoedit /etc/pkm/backup.env
 ```
 
-### 7.4 Common Issues
+Example for an S3-compatible repository:
 
-| Symptom | Fix |
-|---|---|
-| Bot offline in Discord | `sudo systemctl restart research-agent` |
-| `DISCORD_BOT_TOKEN not set` | Edit `.env` and restart |
-| `ModuleNotFoundError: adk_connectors` | `.venv/bin/pip install adk-connector` on the VM |
-| Agent responds with errors | Check `logs/bot_error.log` — likely a DeepSeek API key issue |
-| Bot only works in DMs | @mention it in channels; it only responds to mentions in servers |
-| Can't SSH | Check firewall ingress rule for port 22 |
-| Cron backup not running | `crontab -l` to verify; `chmod +x backup.sh` if missing |
+```ini
+RESTIC_REPOSITORY=s3:https://<endpoint>/<bucket>/pkm
+RESTIC_PASSWORD_FILE=/root/.config/pkm/restic-password
+AWS_ACCESS_KEY_ID=<backup-only-key>
+AWS_SECRET_ACCESS_KEY=<backup-only-secret>
+```
 
-### 7.5 Cross-Device Session Sync (Optional)
-
-If you set `DISCORD_USER_ID` in `.env`, you can also run the ADK web UI locally and see your Discord conversations:
+Initialize, back up, restore-test, then enable the timer:
 
 ```bash
-# On your Mac (NOT the VM):
-cd /Users/andrelawas/Documents/Codex/2026-07-01/add
-research_paper_agent/.venv/bin/adk web research_paper_agent --port 8000
+sudo bash -c 'set -a; source /etc/pkm/backup.env; set +a; restic init'
+sudo systemctl start pkm-backup.service
+sudo APP_DIR=/opt/pkm/current /opt/pkm/current/deploy/verify-restic-restore.sh
+sudo systemctl enable --now pkm-backup.timer
+systemctl list-timers pkm-backup.timer
 ```
 
-Then open `http://localhost:8000` — your Discord chats appear under the "user" namespace.
+Keep the Restic password and Regulation recovery key as separate password-manager
+items. Restic backs up encrypted application data and non-secret configuration;
+it excludes `/etc/pkm/keys`, `/etc/pkm/backup.env`, and its password file. A
+restore therefore requires both the Restic credentials and separately held
+Regulation recovery key.
 
-> **Note:** This only shows the same conversations when the Web UI and Discord bot use the same SQLite database. A bot running on the VM and a Web UI running on your Mac have separate database files by default. Run the Web UI on the VM and access it through an SSH tunnel if you need shared history.
-
----
-
-## 8. Daily Usage
-
-Once deployed, just open Discord on your phone and @mention the bot (or DM it). Example prompts:
-
-- `Ingest all papers in the papers folder.`
-- `Brief me on all papers.`
-- `Search for evidence about transformer attention.`
-- `Compare the papers on evaluation methodology.`
-- `Make a study guide with recall questions.`
-- `Grill me on the limitations across all papers.`
-- `Remember: I prefer concise answers with citations.`
-- `Audit how you should improve around my style.`
-
-### 8.1 Adding New Papers
+## 6. Launch verification
 
 ```bash
-# From your Mac:
-scp your-new-paper.pdf oracle:~/research_paper_agent/papers/
+sudo systemctl status pkm-api caddy --no-pager
+curl -fsS http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1:8080/health/ready
+sudo journalctl -u pkm-api -n 100 --no-pager
+sudo systemctl start pkm-backup.service
+sudo /opt/pkm/current/deploy/verify-restic-restore.sh
 ```
 
-Then ask the bot: `Ingest all papers in the papers folder.`
+On the PWA:
 
-### 8.2 Updating the Code
+1. Unlock with the owner access key.
+2. Create and complete a non-private Regulation check-in.
+3. Restart the API and confirm the session is still present.
+4. Confirm a private check-in disappears after restart.
+5. Export, inspect, and remove a test session from active history.
+6. Do not begin the seven-day daily-use shadow period until ADR 0093's
+   per-record cryptographic deletion is implemented and restore-tested. Current
+   encrypted backup copies expire according to the configured Restic policy.
+7. Install the PWA from the browser and repeat under weak connectivity.
+
+Only begin the seven-day shadow-use period after every check passes.
+
+## 7. Operations
 
 ```bash
-# From your Mac:
-cd /Users/andrelawas/Documents/Codex/2026-07-01/add/research_paper_agent
-./deploy.sh <YOUR_VM_PUBLIC_IP>
+sudo systemctl restart pkm-api
+sudo journalctl -u pkm-api -f
+sudo caddy validate --config /etc/caddy/Caddyfile
+tailscale serve status
+sudo systemctl start pkm-backup.service
+restic snapshots
 ```
 
-The deploy script uses rsync to sync changes and restarts the service automatically.
-
----
-
-## Cost Summary
-
-| Item | Monthly Cost |
-|---|---|
-| Oracle VM (4 ARM cores, 24 GB RAM) | **$0** |
-| 200 GB block storage | **$0** |
-| 10 TB outbound bandwidth | **$0** |
-| DeepSeek API (pay-per-token) | **Same as local use** |
-| Discord API | **$0** |
-| **Total** | **Just your DeepSeek usage** |
+Rotate the owner key by generating a new plaintext key, hashing it with
+SHA-256, replacing `PKM_API_KEY_HASH`, and restarting `pkm-api`. Rotate any API
+key that has ever appeared in a committed file or shell history.

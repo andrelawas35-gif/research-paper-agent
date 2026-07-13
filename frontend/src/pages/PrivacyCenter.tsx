@@ -41,11 +41,11 @@ export default function PrivacyCenter() {
   };
 
   const handleDelete = async (sessionId: string) => {
-    if (!confirm('Permanently delete this session? This cannot be undone.')) return;
+    if (!confirm('Remove this session from active history? Encrypted backup copies expire under the backup retention policy.')) return;
     setLoading(true);
     try {
       await api.privacy.deleteSession(sessionId);
-      setMessage('Session deleted.');
+      setMessage('Session removed from active history.');
       loadSessions();
     } catch (e: unknown) {
       setError((e as api.ApiError).detail || 'Failed to delete session');
@@ -55,11 +55,11 @@ export default function PrivacyCenter() {
   };
 
   const handleDeleteAll = async () => {
-    if (!confirm('Permanently delete ALL regulation sessions? This cannot be undone.')) return;
+    if (!confirm('Remove ALL regulation sessions from active history? Encrypted backup copies expire under the backup retention policy.')) return;
     setLoading(true);
     try {
       const result = await api.privacy.deleteAll();
-      setMessage(`${result.deleted_count} sessions deleted.`);
+      setMessage(`${result.deleted_count} sessions removed from active history.`);
       loadSessions();
     } catch (e: unknown) {
       setError((e as api.ApiError).detail || 'Failed to delete all sessions');
@@ -201,9 +201,9 @@ export default function PrivacyCenter() {
           <div className="card">
             <h2 className="font-semibold mb-2">Export Your Data</h2>
             <p className="text-sm text-muted mb-4">
-              Download a complete JSON export of your regulation data. The
-              export includes all sessions, rules, and metadata for the selected
-              scope. Sensitive content is encrypted in the export.
+              Download a complete JSON export of your regulation data. The JSON
+              contains readable sensitive content, so store it only in a
+              location you trust and delete it when finished.
             </p>
             <button
               className="btn-primary w-full"
@@ -325,8 +325,7 @@ function RetentionTab() {
           </p>
           <p>
             <span className="text-muted">Private check-ins:</span>{' '}
-            {data.private_checkin_retention_hours} hours (then automatically
-            deleted)
+            Memory-only; removed when discarded or when the service restarts
           </p>
         </div>
       </div>
@@ -350,8 +349,7 @@ function RetentionTab() {
 
       {data.sessions.length === 0 && (
         <p className="text-sm text-muted">
-          No sessions with active retention tracking. Sessions are automatically
-          deleted after their retention period.
+          No sessions with active retention tracking.
         </p>
       )}
     </div>

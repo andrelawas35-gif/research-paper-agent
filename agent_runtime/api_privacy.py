@@ -13,14 +13,18 @@ Provides:
 - Retention: retention policy info and expiration tracking
 - Consent: consent management endpoints
 - Access audit: metadata-only access log
+
+The current persistence slice performs verified logical deletion from active
+replay. Per-record key destruction remains a daily-use launch gate, so this API
+must not describe logical deletion as cryptographic erasure.
 """
 
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .emotional_regulation import (
@@ -31,6 +35,9 @@ from .emotional_regulation import (
     SessionState,
 )
 from .stores import StoreRegistry
+
+if TYPE_CHECKING:
+    from .regulation_persistence import EncryptedRegulationPersistence
 
 # ═══════════════════════════════════════════════════════════════════════
 # Shared state (imported from api_regulation at runtime to avoid circular
@@ -70,6 +77,8 @@ def create_privacy_router(
     owner_id: str = "default",
     sessions_dict: Optional[Dict[str, TriggerSession]] = None,
     rules_dict: Optional[Dict[str, PersonalRegulationRule]] = None,
+    persistence: Optional["EncryptedRegulationPersistence"] = None,
+    auth_dependency: Any = None,
 ) -> APIRouter:
     """Create the Privacy Center API router.
 
@@ -82,7 +91,10 @@ def create_privacy_router(
     Returns:
         Configured APIRouter with all Privacy endpoints.
     """
-    router = APIRouter(prefix="/api/privacy", tags=["privacy"])
+    dependencies = [Depends(auth_dependency)] if auth_dependency is not None else []
+    router = APIRouter(
+        prefix="/api/privacy", tags=["privacy"], dependencies=dependencies
+    )
     _sessions = sessions_dict if sessions_dict is not None else {}
     _rules = rules_dict if rules_dict is not None else {}
 
@@ -230,14 +242,15 @@ def create_privacy_router(
     ) -> Dict[str, Any]:
         """Delete a single Regulation session.
 
-        Deletion is verified: the session must exist and is removed
-        from the in-memory store. In production, this would also
-        destroy the per-record encryption key (ADR 0093).
+        Deletion is verified: the session must exist and is removed from active
+        replay. Historical encrypted snapshots remain until storage and backup
+        retention removes them.
         """
         session = _sessions.pop(session_id, None)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-
+        if persistence is not None and not session.is_private:
+            persistence.delete_session(session_id)
         return {
             "session_id": session_id,
             "deleted": True,
@@ -248,11 +261,14 @@ def create_privacy_router(
     async def delete_all_sessions(request: Request) -> Dict[str, Any]:
         """Delete all Regulation sessions.
 
-        This is a bulk operation. Private check-ins are also deleted.
-        In production, this would destroy all per-record encryption keys.
+        This is a bulk operation. Private check-ins are also removed from
+        memory. Durable historical ciphertext remains subject to storage and
+        backup retention.
         """
         count = len(_sessions)
         _sessions.clear()
+        if persistence is not None:
+            persistence.delete_all_sessions()
 
         return {
             "deleted_count": count,
@@ -279,7 +295,7 @@ def create_privacy_router(
 
         export_sessions = []
         for s in _sessions.values():
-            if scope == "durable" and s.is_private:
+            if s.is_private:
                 continue
             export_sessions.append({
                 "session_id": s.session_id,

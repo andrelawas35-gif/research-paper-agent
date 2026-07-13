@@ -5,11 +5,26 @@ import { NowScreen } from './pages/NowScreen';
 import { FocusedFlowNav } from './components/Navigation';
 import { StatusNotice } from './components/StatusNotice';
 import { useState, useEffect } from 'react';
+import { UnlockScreen } from './pages/UnlockScreen';
+import * as api from './api/client';
 
 function App() {
   const location = useLocation();
   const [offline, setOffline] = useState(!navigator.onLine);
   const [degraded, setDegraded] = useState(false);
+  const [authState, setAuthState] = useState<'checking' | 'locked' | 'unlocked'>(
+    api.isAuthenticated() ? 'checking' : 'locked',
+  );
+
+  useEffect(() => {
+    if (authState !== 'checking') return;
+    void api.me()
+      .then(() => setAuthState('unlocked'))
+      .catch(() => {
+        api.clearApiKey();
+        setAuthState('locked');
+      });
+  }, [authState]);
 
   useEffect(() => {
     const goOnline = () => setOffline(false);
@@ -24,11 +39,23 @@ function App() {
 
   useEffect(() => {
     fetch('/health/ready')
-      .then(r => { if (!r.ok) setDegraded(true); })
+      .then(async r => {
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok || body.status !== 'ready') setDegraded(true);
+      })
       .catch(() => setDegraded(true));
   }, []);
 
   const isRegulation = location.pathname.startsWith('/regulation');
+  const mayUsePublicOfflineProtocol = offline && isRegulation;
+
+  if (authState === 'checking' && !mayUsePublicOfflineProtocol) {
+    return <div className="min-h-screen bg-paper" aria-label="Checking access" />;
+  }
+
+  if (authState === 'locked' && !mayUsePublicOfflineProtocol) {
+    return <UnlockScreen onUnlock={() => setAuthState('unlocked')} />;
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-paper safe-top">
@@ -39,7 +66,7 @@ function App() {
       )}
       {degraded && !offline && (
         <StatusNotice variant="capability">
-          Model assistance is paused. Local protocol available.
+          Some local services are unavailable. Regulation may be limited.
         </StatusNotice>
       )}
 
@@ -49,7 +76,7 @@ function App() {
 
       <main className="flex-1">
         <Routes>
-          <Route path="/" element={<NowScreen offline={offline} degraded={degraded} />} />
+          <Route path="/" element={<NowScreen />} />
           <Route path="/regulation" element={<RegulationFlow />} />
           <Route path="/privacy" element={<PrivacyCenter />} />
         </Routes>

@@ -144,13 +144,16 @@ class CorrelationMiddleware:
 
         correlation_id = str(uuid.uuid4())
         start = time.monotonic()
+        status_code = 500
 
         # Inject correlation ID into request state
         async def _receive() -> Any:
-            return await receive
+            return await receive()
 
         async def _send(message: Any) -> None:
+            nonlocal status_code
             if message["type"] == "http.response.start":
+                status_code = int(message["status"])
                 headers = dict(message.get("headers", []))
                 headers[b"x-request-id"] = correlation_id.encode()
                 message["headers"] = list(headers.items())
@@ -160,13 +163,12 @@ class CorrelationMiddleware:
 
         # Log audit after response
         duration = (time.monotonic() - start) * 1000
-        # Extract status from scope (limited in ASGI; best-effort)
         self._audit.log_access(
             owner_id=self._owner_id,
             endpoint=scope.get("path", ""),
             method=scope.get("method", ""),
             correlation_id=correlation_id,
-            status_code=200,  # best-effort
+            status_code=status_code,
             duration_ms=duration,
         )
 
@@ -181,6 +183,7 @@ def create_app(
     audit: Optional[AuditLogger] = None,
     owner_id: str = "default",
     model_provider: Any = None,
+    regulation_persistence: Any = None,
 ) -> FastAPI:
     """Create the FastAPI application.
 
@@ -253,10 +256,13 @@ def create_app(
             checks["regulation_store"] = "error"
 
         all_ok = all(v == "ok" for v in checks.values())
-        return {
+        payload = {
             "status": "ready" if all_ok else "degraded",
             "checks": checks,
         }
+        if not all_ok:
+            return JSONResponse(status_code=503, content=payload)
+        return payload
 
     # ── Protected endpoints (auth required) ──────────────────────────
 
@@ -314,6 +320,8 @@ def create_app(
         model_provider=model_provider,
         sessions_dict=_shared_sessions,
         rules_dict=_shared_rules,
+        persistence=regulation_persistence,
+        auth_dependency=_auth,
     )
     app.include_router(_regulation_router)
 
@@ -324,6 +332,8 @@ def create_app(
         owner_id=_owner_id,
         sessions_dict=_shared_sessions,
         rules_dict=_shared_rules,
+        persistence=regulation_persistence,
+        auth_dependency=_auth,
     )
     app.include_router(_privacy_router)
 

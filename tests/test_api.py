@@ -145,6 +145,35 @@ class TestAuthentication:
         assert "key" not in data["detail"].lower()
         assert "sha" not in data["detail"].lower()
 
+    def test_regulation_endpoints_require_auth(self, client: TestClient) -> None:
+        response = client.get("/api/regulation/sessions")
+        assert response.status_code == 401
+
+    def test_privacy_endpoints_require_auth(self, client: TestClient) -> None:
+        response = client.get("/api/privacy/summary")
+        assert response.status_code == 401
+
+    def test_discarding_private_session_removes_it_from_memory(
+        self, client: TestClient
+    ) -> None:
+        headers = {"X-API-Key": "test-api-key"}
+        created = client.post(
+            "/api/regulation/sessions",
+            headers=headers,
+            json={"trigger_event": "temporary", "is_private": True},
+        ).json()
+
+        response = client.post(
+            f"/api/regulation/sessions/{created['session_id']}/expire",
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["state"] == "expired"
+        assert client.get(
+            f"/api/regulation/sessions/{created['session_id']}", headers=headers
+        ).status_code == 404
+
 
 # ── Audit ────────────────────────────────────────────────────────────
 

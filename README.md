@@ -36,7 +36,9 @@ In this local Codex workspace, the bundled Python 3.12 runtime works:
 
 2. Put source documents in `papers/`.
 3. Copy `.env.example` to `.env`.
-4. Add your DeepSeek API key.
+4. Add the model credential required by the runtime you are using. The hardened
+   PWA deployment uses an OpenAI API key; the legacy ADK launcher retains its
+   existing OpenAI-compatible model configuration.
 5. From the parent folder, run:
 
 ```bash
@@ -218,18 +220,14 @@ Grill answers are provisional by default. They are logged as candidate signals i
 
 ## Model Backend
 
-The agent uses DeepSeek through ADK's OpenAI-compatible model wrapper.
+The production PWA uses OpenAI through `agent_runtime.asgi`. Configure
+`OPENAI_API_KEY`; model-assisted flows degrade to deterministic local guidance
+when that key or the upstream service is unavailable. Optional model overrides
+are `OPENAI_GPT5_MINI_MODEL` and `OPENAI_GPT5_MODEL`.
 
-Set these in `.env`:
-
-```powershell
-DEEPSEEK_API_KEY=your_deepseek_api_key
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
-DEEPSEEK_MAX_TOKENS=4096
-```
-
-Use `deepseek-v4-pro` for a stronger model, or `deepseek-v4-flash` for the default faster path.
+The original Google ADK launcher is a separate compatibility path and retains
+its OpenAI-compatible provider configuration. See `.env.example` for supported
+variables; never commit real credentials.
 
 ## PDF Support
 

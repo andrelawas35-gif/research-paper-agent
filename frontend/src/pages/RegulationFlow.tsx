@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import * as api from '../api/client';
 import type {
   RegulationSession,
@@ -18,6 +18,7 @@ import type {
 import { AnnotationRail } from '../components/AnnotationRail';
 import { StatusNotice } from '../components/StatusNotice';
 import { SourceStamp } from '../components/SourceStamp';
+import { OfflineRegulationProtocol } from './OfflineRegulationProtocol';
 
 // ── Step definitions ────────────────────────────────────────────────
 
@@ -277,6 +278,7 @@ function FactsStep({
 }
 
 function InterpretationsStep({
+  session,
   onComplete,
   loading,
 }: {
@@ -287,13 +289,22 @@ function InterpretationsStep({
       plausibility: number;
       evidence_for: string[];
       evidence_against: string[];
-    }[],
+  }[],
   ) => void;
   loading: boolean;
 }) {
   const [items, setItems] = useState<
     { text: string; plausibility: number; evidenceFor: string; evidenceAgainst: string }[]
-  >([{ text: '', plausibility: 0.5, evidenceFor: '', evidenceAgainst: '' }]);
+  >(
+    session.interpretations.length > 0
+      ? session.interpretations.map((item) => ({
+          text: item.text,
+          plausibility: item.plausibility,
+          evidenceFor: item.evidence_for.join('\n'),
+          evidenceAgainst: item.evidence_against.join('\n'),
+        }))
+      : [{ text: '', plausibility: 0.5, evidenceFor: '', evidenceAgainst: '' }],
+  );
 
   const addItem = () =>
     setItems([...items, { text: '', plausibility: 0.5, evidenceFor: '', evidenceAgainst: '' }]);
@@ -612,6 +623,7 @@ function UrgesStep({
 }
 
 function ActionsStep({
+  session,
   onComplete,
   assistResult,
   loading,
@@ -627,7 +639,15 @@ function ActionsStep({
 }) {
   const [items, setItems] = useState<
     { text: string; reversible: boolean; waitMinutes: number }[]
-  >([{ text: '', reversible: true, waitMinutes: 15 }]);
+  >(
+    session.actions.length > 0
+      ? session.actions.map((item) => ({
+          text: item.text,
+          reversible: item.reversible,
+          waitMinutes: item.waiting_period_minutes,
+        }))
+      : [{ text: '', reversible: true, waitMinutes: 15 }],
+  );
 
   const addItem = () =>
     setItems([...items, { text: '', reversible: true, waitMinutes: 15 }]);
@@ -888,8 +908,9 @@ function CompletedView({ session }: { session: RegulationSession }) {
 
 // ── Main RegulationFlow component ────────────────────────────────────
 
-export default function RegulationFlow() {
+function OnlineRegulationFlow() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const [currentStep, setCurrentStep] = useState<StepId>('trigger');
   const [session, setSession] = useState<RegulationSession | null>(null);
@@ -897,6 +918,47 @@ export default function RegulationFlow() {
   const [error, setError] = useState('');
   const [assistResult, setAssistResult] = useState<AssistResult | null>(null);
   const [isComplete, setIsComplete] = useState(false);
+
+  useEffect(() => {
+    const sessionId = searchParams.get('session');
+    if (!sessionId) return;
+
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+
+    void api.sessions
+      .get(sessionId)
+      .then((savedSession) => {
+        if (cancelled) return;
+        setSession(savedSession);
+        if (savedSession.state === 'safety_screen' || savedSession.state === 'safety_branch') {
+          setCurrentStep('safety');
+        } else if (savedSession.facts.length === 0) {
+          setCurrentStep('facts');
+        } else if (savedSession.interpretations.length === 0) {
+          setCurrentStep('interpret');
+        } else if (savedSession.emotions.length === 0) {
+          setCurrentStep('emotions');
+        } else if (savedSession.urges.length === 0) {
+          setCurrentStep('urges');
+        } else {
+          setCurrentStep('actions');
+        }
+      })
+      .catch((requestError: unknown) => {
+        if (cancelled) return;
+        const apiError = requestError as api.ApiError;
+        setError(apiError.detail || 'This saved session could not be resumed.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams]);
 
   // Reset state for new flow
   const resetFlow = useCallback(() => {
@@ -1190,4 +1252,21 @@ export default function RegulationFlow() {
       )}
     </div>
   );
+}
+
+export default function RegulationFlow() {
+  const [offline, setOffline] = useState(!navigator.onLine);
+
+  useEffect(() => {
+    const goOnline = () => setOffline(false);
+    const goOffline = () => setOffline(true);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  }, []);
+
+  return offline ? <OfflineRegulationProtocol /> : <OnlineRegulationFlow />;
 }
