@@ -98,7 +98,7 @@ export default function PrivacyCenter() {
   return (
     <div className="max-w-lg mx-auto px-4 py-6 safe-bottom">
       <div className="flex items-center justify-between mb-6">
-        <Link to="/" className="text-slate-400 hover:text-slate-200 text-sm">
+        <Link to="/" className="text-muted hover:text-ink text-sm">
           ← Home
         </Link>
         <h1 className="text-lg font-semibold">Data & Privacy Center</h1>
@@ -106,14 +106,14 @@ export default function PrivacyCenter() {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-slate-800 mb-6">
+      <div className="flex border-b border-border mb-6">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             className={`flex-1 pb-3 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.id
-                ? 'border-indigo-500 text-indigo-300'
-                : 'border-transparent text-slate-500 hover:text-slate-300'
+                ? 'border-indigo-500 text-action'
+                : 'border-transparent text-muted hover:text-ink'
             }`}
             onClick={() => {
               setActiveTab(tab.id);
@@ -127,13 +127,13 @@ export default function PrivacyCenter() {
       </div>
 
       {message && (
-        <div className="bg-emerald-900/30 border border-emerald-800 rounded-lg p-3 text-emerald-200 text-sm mb-4">
+        <div className="bg-emerald-900/30 border border-emerald-800 rounded-control p-3 text-emerald-200 text-sm mb-4">
           {message}
         </div>
       )}
 
       {error && (
-        <div className="bg-red-900/40 border border-red-800 rounded-lg p-3 text-red-200 text-sm mb-4">
+        <div className="bg-danger/10/40 border border-danger rounded-control p-3 text-danger text-sm mb-4">
           {error}
         </div>
       )}
@@ -142,7 +142,7 @@ export default function PrivacyCenter() {
       {activeTab === 'sessions' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-muted">
               {sessions.length} regulation session{sessions.length !== 1 ? 's' : ''}
             </p>
             {sessions.length > 0 && (
@@ -156,10 +156,10 @@ export default function PrivacyCenter() {
             )}
           </div>
 
-          {loading && <p className="text-slate-500 text-sm">Loading...</p>}
+          {loading && <p className="text-muted text-sm">Loading...</p>}
 
           {!loading && sessions.length === 0 && (
-            <p className="text-slate-500 text-sm">
+            <p className="text-muted text-sm">
               No regulation sessions found. Sessions from your check-ins will
               appear here.
             </p>
@@ -168,10 +168,10 @@ export default function PrivacyCenter() {
           {sessions.map((s) => (
             <div key={s.session_id} className="card flex items-start justify-between">
               <div className="space-y-1 text-sm">
-                <p className="font-medium text-slate-200">
+                <p className="font-medium text-ink">
                   {s.trigger_event || 'Untitled'}
                 </p>
-                <p className="text-slate-500 text-xs">
+                <p className="text-muted text-xs">
                   {s.created_at} • {s.state}
                   {s.is_private ? ' • Private' : ' • Saved'}
                   {s.safety_active ? ' • Safety Active' : ''}
@@ -182,7 +182,7 @@ export default function PrivacyCenter() {
                 </p>
               </div>
               <button
-                className="text-red-400 hover:text-red-300 text-sm ml-4 shrink-0"
+                className="text-danger hover:text-red-300 text-sm ml-4 shrink-0"
                 onClick={() => handleDelete(s.session_id)}
                 disabled={loading}
               >
@@ -198,7 +198,7 @@ export default function PrivacyCenter() {
         <div className="space-y-6">
           <div className="card">
             <h2 className="font-semibold mb-2">Export Your Data</h2>
-            <p className="text-sm text-slate-400 mb-4">
+            <p className="text-sm text-muted mb-4">
               Download a complete JSON export of your regulation data. The
               export includes all sessions, rules, and metadata for the selected
               scope. Sensitive content is encrypted in the export.
@@ -214,7 +214,7 @@ export default function PrivacyCenter() {
 
           <div className="card">
             <h2 className="font-semibold mb-2">Export Scope</h2>
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-muted">
               Currently exports all regulation sessions and personal rules.
               Private check-ins (ephemeral sessions) are not included.
               Intimate relationship content is excluded by default.
@@ -254,24 +254,24 @@ function AuditTab() {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-slate-400">
+      <p className="text-sm text-muted">
         Metadata-only access log. No content or sensitive data is recorded here.
       </p>
 
-      {loading && <p className="text-slate-500 text-sm">Loading...</p>}
+      {loading && <p className="text-muted text-sm">Loading...</p>}
       {error && (
-        <div className="bg-red-900/40 border border-red-800 rounded-lg p-3 text-red-200 text-sm">
+        <div className="bg-danger/10/40 border border-danger rounded-control p-3 text-danger text-sm">
           {error}
         </div>
       )}
 
       {!loading && entries.length === 0 && (
-        <p className="text-slate-500 text-sm">No audit entries yet.</p>
+        <p className="text-muted text-sm">No audit entries yet.</p>
       )}
 
       <div className="space-y-2">
         {entries.slice(-20).reverse().map((entry, i) => (
-          <div key={i} className="card text-xs text-slate-400">
+          <div key={i} className="card text-xs text-muted">
             <div className="flex justify-between">
               <span>{entry.endpoint as string}</span>
               <span>{entry.method as string}</span>
@@ -303,10 +303,10 @@ function RetentionTab() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <p className="text-slate-500 text-sm">Loading...</p>;
+  if (loading) return <p className="text-muted text-sm">Loading...</p>;
   if (error)
     return (
-      <div className="bg-red-900/40 border border-red-800 rounded-lg p-3 text-red-200 text-sm">
+      <div className="bg-danger/10/40 border border-danger rounded-control p-3 text-danger text-sm">
         {error}
       </div>
     );
@@ -316,13 +316,13 @@ function RetentionTab() {
     <div className="space-y-6">
       <div className="card">
         <h2 className="font-semibold mb-2">Retention Policy</h2>
-        <div className="space-y-2 text-sm text-slate-300">
+        <div className="space-y-2 text-sm text-ink">
           <p>
-            <span className="text-slate-400">Default retention:</span>{' '}
+            <span className="text-muted">Default retention:</span>{' '}
             {data.default_retention_days} days
           </p>
           <p>
-            <span className="text-slate-400">Private check-ins:</span>{' '}
+            <span className="text-muted">Private check-ins:</span>{' '}
             {data.private_checkin_retention_hours} hours (then automatically
             deleted)
           </p>
@@ -336,7 +336,7 @@ function RetentionTab() {
             {data.sessions.map((s) => (
               <div
                 key={s.session_id}
-                className="text-sm flex justify-between text-slate-400"
+                className="text-sm flex justify-between text-muted"
               >
                 <span className="font-mono text-xs">{s.session_id.slice(0, 12)}...</span>
                 <span>Expires: {s.expires_at}</span>
@@ -347,7 +347,7 @@ function RetentionTab() {
       )}
 
       {data.sessions.length === 0 && (
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-muted">
           No sessions with active retention tracking. Sessions are automatically
           deleted after their retention period.
         </p>

@@ -1,95 +1,99 @@
+/* ── PKM Frontend — index.css ────────────────────────────────────────
+   Import point for all styles. Layers: tokens → base → tailwind → workspace.
+   Never add implementation styles here — use the layer files.            */
+
+@import './styles/tokens.css';
+@import './styles/base.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  body {
-    @apply bg-slate-950 text-slate-100;
+  html {
+    @apply font-ui;
     -webkit-tap-highlight-color: transparent;
   }
 
-  /* Safe area for notched phones */
-  .safe-top {
-    padding-top: env(safe-area-inset-top);
-  }
-  .safe-bottom {
-    padding-bottom: env(safe-area-inset-bottom);
+  body {
+    @apply bg-paper text-ink antialiased;
   }
 }
 
 @layer components {
+  /* ── Buttons ──────────────────────────────────────────────────── */
   .btn-primary {
-    @apply bg-indigo-600 hover:bg-indigo-500 text-white font-medium
-           py-3 px-6 rounded-lg transition-colors duration-150
-           focus:outline-none focus:ring-2 focus:ring-indigo-400
-           focus:ring-offset-2 focus:ring-offset-slate-900
-           disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-action text-surface font-semibold
+           py-3 px-6 rounded-control
+           transition-all duration-inline ease-calm
+           focus-visible:ring-3 focus-visible:ring-action
+           focus-visible:ring-offset-2 focus-visible:ring-offset-paper
+           disabled:opacity-50 disabled:cursor-not-allowed
+           hover:brightness-110;
   }
 
   .btn-secondary {
-    @apply bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium
-           py-3 px-6 rounded-lg transition-colors duration-150
-           focus:outline-none focus:ring-2 focus:ring-slate-400
-           focus:ring-offset-2 focus:ring-offset-slate-900;
+    @apply bg-action-soft text-action font-semibold
+           py-3 px-6 rounded-control
+           transition-all duration-inline ease-calm
+           focus-visible:ring-3 focus-visible:ring-action
+           focus-visible:ring-offset-2 focus-visible:ring-offset-paper
+           disabled:opacity-50 disabled:cursor-not-allowed
+           hover:brightness-95;
+  }
+
+  .btn-tertiary {
+    @apply bg-transparent text-action font-semibold
+           py-3 px-6 rounded-control
+           transition-all duration-inline ease-calm
+           focus-visible:ring-3 focus-visible:ring-action
+           focus-visible:ring-offset-2 focus-visible:ring-offset-paper
+           hover:bg-action-soft;
   }
 
   .btn-danger {
-    @apply bg-red-900/80 hover:bg-red-800 text-red-100 font-medium
-           py-3 px-6 rounded-lg transition-colors duration-150
-           focus:outline-none focus:ring-2 focus:ring-red-400
-           focus:ring-offset-2 focus:ring-offset-slate-900;
+    @apply bg-danger text-surface font-semibold
+           py-3 px-6 rounded-control
+           transition-all duration-inline ease-calm
+           focus-visible:ring-3 focus-visible:ring-danger
+           focus-visible:ring-offset-2 focus-visible:ring-offset-paper
+           disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
   .card {
-    @apply bg-slate-900 border border-slate-800 rounded-xl p-6
-           shadow-lg;
+    @apply bg-surface border border-border rounded-panel p-6;
   }
 
   .input-field {
-    @apply w-full bg-slate-800 border border-slate-700 rounded-lg
-           px-4 py-3 text-slate-100 placeholder-slate-500
-           focus:outline-none focus:ring-2 focus:ring-indigo-500
-           focus:border-transparent transition-colors duration-150;
+    @apply w-full bg-surface border border-border rounded-control
+           px-4 py-3 text-ink placeholder-muted
+           transition-all duration-inline ease-calm
+           focus:border-action focus:ring-3 focus:ring-action/20
+           disabled:opacity-60 disabled:bg-paper;
   }
 
   .textarea-field {
     @apply input-field resize-none;
   }
 
-  .step-indicator {
-    @apply flex items-center justify-center w-8 h-8 rounded-full
-           text-sm font-bold border-2 transition-colors duration-200;
+  .notice {
+    @apply border rounded-row p-4 text-sm;
+  }
+  .notice-capability {
+    @apply bg-action-soft border-action/20 text-action;
+  }
+  .notice-caution {
+    @apply bg-caution/10 border-caution/30 text-caution;
+  }
+  .notice-safety {
+    @apply bg-danger/10 border-danger/30 text-danger;
   }
 
-  .step-active {
-    @apply step-indicator bg-indigo-600 border-indigo-500 text-white;
+  .source-stamp {
+    @apply text-xs text-muted flex items-center gap-1;
   }
 
-  .step-completed {
-    @apply step-indicator bg-emerald-600 border-emerald-500 text-white;
+  .divider {
+    @apply border-t border-border;
   }
-
-  .step-pending {
-    @apply step-indicator bg-slate-800 border-slate-700 text-slate-500;
-  }
-
-  .progress-bar {
-    @apply h-1 bg-slate-800 rounded-full overflow-hidden;
-  }
-
-  .progress-fill {
-    @apply h-full bg-indigo-500 rounded-full transition-all duration-500 ease-out;
-  }
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #475569;
-  border-radius: 3px;
 }

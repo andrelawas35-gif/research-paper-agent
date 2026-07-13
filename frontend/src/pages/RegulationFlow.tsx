@@ -51,7 +51,7 @@ function TriggerStep({
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold mb-2">What happened?</h2>
-        <p className="text-slate-400 text-sm">
+        <p className="text-muted text-sm">
           Describe the situation in one sentence. Focus on what a camera would
           have recorded — not your interpretation yet.
         </p>
@@ -65,18 +65,18 @@ function TriggerStep({
         disabled={loading}
       />
 
-      <label className="flex items-center gap-3 text-sm text-slate-400">
+      <label className="flex items-center gap-3 text-sm text-muted">
         <input
           type="checkbox"
           checked={isPrivate}
           onChange={(e) => setIsPrivate(e.target.checked)}
-          className="rounded bg-slate-800 border-slate-600"
+          className="rounded bg-paper border-border"
         />
         Private Check-In — this session will not be saved to durable history
       </label>
 
       {error && (
-        <div className="bg-red-900/40 border border-red-800 rounded-lg p-3 text-red-200 text-sm">
+        <div className="bg-danger/10/40 border border-danger rounded-control p-3 text-danger text-sm">
           {error}
         </div>
       )}
@@ -124,7 +124,7 @@ function SafetyStep({
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold mb-2">Safety Check</h2>
-        <p className="text-slate-400 text-sm">
+        <p className="text-muted text-sm">
           Before we continue, please let us know if any of the following apply.
           This helps route you to the right support.
         </p>
@@ -134,21 +134,21 @@ function SafetyStep({
         {categories.map((cat) => (
           <button
             key={cat.value}
-            className={`w-full text-left p-4 rounded-lg border transition-colors ${
+            className={`w-full text-left p-4 rounded-control border transition-colors ${
               category === cat.value
-                ? 'border-indigo-500 bg-indigo-500/10 text-indigo-200'
-                : 'border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-600'
+                ? 'border-indigo-500 bg-action/10 text-indigo-200'
+                : 'border-border bg-paper/50 text-ink hover:border-border'
             }`}
             onClick={() => setCategory(cat.value)}
           >
             <div className="font-medium">{cat.label}</div>
-            <div className="text-sm text-slate-400">{cat.description}</div>
+            <div className="text-sm text-muted">{cat.description}</div>
           </button>
         ))}
       </div>
 
       {selectedCat && selectedCat.value !== 'none' && resources && (
-        <div className="bg-amber-900/30 border border-amber-800 rounded-lg p-4">
+        <div className="bg-amber-900/30 border border-amber-800 rounded-control p-4">
           <SafetyResourcesPanel
             category={category}
             resources={resources.resources}
@@ -157,7 +157,7 @@ function SafetyStep({
       )}
 
       {error && (
-        <div className="bg-red-900/40 border border-red-800 rounded-lg p-3 text-red-200 text-sm">
+        <div className="bg-danger/10/40 border border-danger rounded-control p-3 text-danger text-sm">
           {error}
         </div>
       )}
@@ -205,7 +205,7 @@ function FactsStep({
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold mb-2">What are the facts?</h2>
-        <p className="text-slate-400 text-sm">
+        <p className="text-muted text-sm">
           List only what you know happened — what a camera would record.
           Separate these from what you think they mean.
         </p>
@@ -224,7 +224,7 @@ function FactsStep({
               />
               {items.length > 1 && (
                 <button
-                  className="text-slate-500 hover:text-red-400 p-1"
+                  className="text-muted hover:text-danger p-1"
                   onClick={() => removeItem(i)}
                   aria-label="Remove fact"
                 >
@@ -233,7 +233,7 @@ function FactsStep({
               )}
             </div>
             <div className="flex items-center gap-3">
-              <label className="text-sm text-slate-400">Certainty:</label>
+              <label className="text-sm text-muted">Certainty:</label>
               <input
                 type="range"
                 min="0"
@@ -244,7 +244,7 @@ function FactsStep({
                 className="flex-1 accent-indigo-500"
                 disabled={loading}
               />
-              <span className="text-sm text-slate-300 w-8">
+              <span className="text-sm text-ink w-8">
                 {Math.round(item.certainty * 100)}%
               </span>
             </div>
@@ -309,7 +309,7 @@ function InterpretationsStep({
         <h2 className="text-xl font-semibold mb-2">
           What could these facts mean?
         </h2>
-        <p className="text-slate-400 text-sm">
+        <p className="text-muted text-sm">
           Consider at least two interpretations — including one that does not
           assume bad intent. Rate how plausible each one feels.
         </p>
@@ -328,7 +328,7 @@ function InterpretationsStep({
               />
               {items.length > 1 && (
                 <button
-                  className="text-slate-500 hover:text-red-400 p-1"
+                  className="text-muted hover:text-danger p-1"
                   onClick={() => removeItem(i)}
                   aria-label="Remove interpretation"
                 >
@@ -338,7 +338,7 @@ function InterpretationsStep({
             </div>
 
             <div className="flex items-center gap-3">
-              <label className="text-sm text-slate-400">Plausibility:</label>
+              <label className="text-sm text-muted">Plausibility:</label>
               <input
                 type="range"
                 min="0"
@@ -349,7 +349,7 @@ function InterpretationsStep({
                 className="flex-1 accent-indigo-500"
                 disabled={loading}
               />
-              <span className="text-sm text-slate-300 w-8">
+              <span className="text-sm text-ink w-8">
                 {Math.round(item.plausibility * 100)}%
               </span>
             </div>
@@ -381,7 +381,7 @@ function InterpretationsStep({
       </button>
 
       {validItems.length === 1 && (
-        <div className="bg-amber-900/30 border border-amber-800 rounded-lg p-3 text-amber-200 text-sm">
+        <div className="bg-amber-900/30 border border-amber-800 rounded-control p-3 text-amber-200 text-sm">
           Consider adding at least one more interpretation that doesn't assume bad
           intent. This helps avoid jumping to conclusions.
         </div>
@@ -452,7 +452,7 @@ function EmotionsStep({
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold mb-2">What are you feeling?</h2>
-        <p className="text-slate-400 text-sm">
+        <p className="text-muted text-sm">
           Tap emotions that resonate, then adjust intensity. You can select
           multiple.
         </p>
@@ -462,10 +462,10 @@ function EmotionsStep({
         {EMOTIONS.map((emotion) => (
           <button
             key={emotion}
-            className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+            className={`px-3 py-2 rounded-control text-sm font-medium transition-colors ${
               selected[emotion]
-                ? 'bg-indigo-600 text-white'
-                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                ? 'bg-action text-white'
+                : 'bg-paper text-muted hover:bg-slate-700'
             }`}
             onClick={() => toggleEmotion(emotion)}
             disabled={loading}
@@ -479,7 +479,7 @@ function EmotionsStep({
         <div key={label} className="card">
           <div className="flex items-center justify-between mb-2">
             <span className="font-medium capitalize">{label}</span>
-            <span className="text-sm text-slate-400">{intensity}/10</span>
+            <span className="text-sm text-muted">{intensity}/10</span>
           </div>
           <input
             type="range"
@@ -542,7 +542,7 @@ function UrgesStep({
         <h2 className="text-xl font-semibold mb-2">
           What do you feel like doing?
         </h2>
-        <p className="text-slate-400 text-sm">
+        <p className="text-muted text-sm">
           Name your urges honestly — they are information, not instructions.
           No judgment.
         </p>
@@ -561,7 +561,7 @@ function UrgesStep({
               />
               {items.length > 1 && (
                 <button
-                  className="text-slate-500 hover:text-red-400 p-1"
+                  className="text-muted hover:text-danger p-1"
                   onClick={() => removeItem(i)}
                   aria-label="Remove urge"
                 >
@@ -570,7 +570,7 @@ function UrgesStep({
               )}
             </div>
             <div className="flex items-center gap-3">
-              <label className="text-sm text-slate-400">Strength:</label>
+              <label className="text-sm text-muted">Strength:</label>
               <input
                 type="range"
                 min="1"
@@ -580,7 +580,7 @@ function UrgesStep({
                 className="flex-1 accent-indigo-500"
                 disabled={loading}
               />
-              <span className="text-sm text-slate-300 w-6">{item.strength}</span>
+              <span className="text-sm text-ink w-6">{item.strength}</span>
             </div>
           </div>
         ))}
@@ -642,25 +642,25 @@ function ActionsStep({
         <h2 className="text-xl font-semibold mb-2">
           What will you do?
         </h2>
-        <p className="text-slate-400 text-sm">
+        <p className="text-muted text-sm">
           Choose actions aligned with your values and long-term wellbeing.
           Consider waiting before acting on strong emotions.
         </p>
       </div>
 
       {assistResult && !assistResult.is_degraded && assistResult.model_response && (
-        <div className="bg-indigo-900/20 border border-indigo-800 rounded-lg p-4">
-          <h3 className="text-sm font-semibold text-indigo-300 mb-2">
+        <div className="bg-indigo-900/20 border border-indigo-800 rounded-control p-4">
+          <h3 className="text-sm font-semibold text-action mb-2">
             AI Suggestions
           </h3>
-          <p className="text-sm text-slate-300 whitespace-pre-wrap">
+          <p className="text-sm text-ink whitespace-pre-wrap">
             {(assistResult.model_response as Record<string, unknown>).uncertainty as string || ''}
           </p>
         </div>
       )}
 
       {assistResult?.is_degraded && (
-        <div className="bg-amber-900/20 border border-amber-800 rounded-lg p-4">
+        <div className="bg-amber-900/20 border border-amber-800 rounded-control p-4">
           <p className="text-sm text-amber-200">
             AI assistance is unavailable. The offline protocol is active —
             your own judgment is the guide here.
@@ -684,7 +684,7 @@ function ActionsStep({
               />
               {items.length > 1 && (
                 <button
-                  className="text-slate-500 hover:text-red-400 p-1"
+                  className="text-muted hover:text-danger p-1"
                   onClick={() => removeItem(i)}
                   aria-label="Remove action"
                 >
@@ -694,17 +694,17 @@ function ActionsStep({
             </div>
 
             <div className="flex items-center gap-3 text-sm">
-              <label className="flex items-center gap-2 text-slate-400">
+              <label className="flex items-center gap-2 text-muted">
                 <input
                   type="checkbox"
                   checked={item.reversible}
                   onChange={(e) => updateItem(i, 'reversible', e.target.checked)}
-                  className="rounded bg-slate-800 border-slate-600"
+                  className="rounded bg-paper border-border"
                   disabled={loading}
                 />
                 Reversible
               </label>
-              <label className="text-slate-400">
+              <label className="text-muted">
                 Wait{' '}
                 <input
                   type="number"
@@ -712,7 +712,7 @@ function ActionsStep({
                   max="1440"
                   value={item.waitMinutes}
                   onChange={(e) => updateItem(i, 'waitMinutes', parseInt(e.target.value) || 0)}
-                  className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200"
+                  className="w-16 bg-paper border border-border rounded px-2 py-1 text-ink"
                   disabled={loading}
                 />{' '}
                 min
@@ -765,7 +765,7 @@ function OutcomeStep({
     <div className="space-y-6 text-center">
       <div className="text-4xl mb-4">✅</div>
       <h2 className="text-xl font-semibold">Check-in complete</h2>
-      <p className="text-slate-400 text-sm">
+      <p className="text-muted text-sm">
         Great job working through this. How did it go? Recording the outcome
         helps you learn what works for you.
       </p>
@@ -780,10 +780,10 @@ function OutcomeStep({
 
       <div className="flex justify-center gap-3">
         <button
-          className={`px-6 py-2 rounded-lg font-medium transition-colors ${
+          className={`px-6 py-2 rounded-control font-medium transition-colors ${
             wasHelpful === true
-              ? 'bg-emerald-600 text-white'
-              : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+              ? 'bg-action text-white'
+              : 'bg-paper text-muted hover:bg-slate-700'
           }`}
           onClick={() => setWasHelpful(true)}
           disabled={loading}
@@ -791,10 +791,10 @@ function OutcomeStep({
           Helpful
         </button>
         <button
-          className={`px-6 py-2 rounded-lg font-medium transition-colors ${
+          className={`px-6 py-2 rounded-control font-medium transition-colors ${
             wasHelpful === false
               ? 'bg-red-600 text-white'
-              : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+              : 'bg-paper text-muted hover:bg-slate-700'
           }`}
           onClick={() => setWasHelpful(false)}
           disabled={loading}
@@ -819,7 +819,7 @@ function OutcomeStep({
 
       <Link
         to="/regulation"
-        className="block text-sm text-slate-500 hover:text-slate-300"
+        className="block text-sm text-muted hover:text-ink"
       >
         Skip — I'll record the outcome later
       </Link>
@@ -832,30 +832,30 @@ function CompletedView({ session }: { session: RegulationSession }) {
     <div className="space-y-6 text-center">
       <div className="text-5xl mb-4">🎯</div>
       <h2 className="text-xl font-semibold">You're all set</h2>
-      <p className="text-slate-400">
+      <p className="text-muted">
         Your check-in has been saved. Here's a summary:
       </p>
 
       <div className="card text-left space-y-2 text-sm">
         <p>
-          <span className="text-slate-400">Trigger:</span>{' '}
+          <span className="text-muted">Trigger:</span>{' '}
           {session.trigger_event}
         </p>
         {session.facts.length > 0 && (
           <p>
-            <span className="text-slate-400">Facts:</span>{' '}
+            <span className="text-muted">Facts:</span>{' '}
             {session.facts.length} recorded
           </p>
         )}
         {session.emotions.length > 0 && (
           <p>
-            <span className="text-slate-400">Emotions:</span>{' '}
+            <span className="text-muted">Emotions:</span>{' '}
             {session.emotions.map((e) => e.label).join(', ')}
           </p>
         )}
         {session.actions.length > 0 && (
           <p>
-            <span className="text-slate-400">Actions:</span>{' '}
+            <span className="text-muted">Actions:</span>{' '}
             {session.actions.map((a) => a.text).join('; ')}
           </p>
         )}
@@ -1078,7 +1078,7 @@ export default function RegulationFlow() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <button
-          className="text-slate-400 hover:text-slate-200 text-sm"
+          className="text-muted hover:text-ink text-sm"
           onClick={() => {
             if (isComplete || currentStep === 'trigger') {
               navigate('/');
@@ -1171,8 +1171,8 @@ export default function RegulationFlow() {
 
       {/* Pause / Resume */}
       {!isComplete && currentStep !== 'trigger' && session && (
-        <div className="mt-8 pt-4 border-t border-slate-800 text-center">
-          <p className="text-xs text-slate-500">
+        <div className="mt-8 pt-4 border-t border-border text-center">
+          <p className="text-xs text-muted">
             Session {session.session_id.slice(0, 8)}... •
             {session.is_private ? ' Private' : ' Saved'} •
             Step {stepIndex + 1} of {STEPS.length}

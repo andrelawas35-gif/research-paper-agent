@@ -1,0 +1,71 @@
+/* ── Calm-studio design tokens ────────────────────────────────────────
+   Mirrors tailwind.config.js for any non-Tailwind consumers.         */
+
+:root {
+  /* ── Colors ───────────────────────────────────────────────────── */
+  --color-paper: #F6F3EC;
+  --color-surface: #FFFFFF;
+  --color-ink: #1F2429;
+  --color-muted: #596166;
+  --color-action: #1A5752;
+  --color-action-soft: #E0F1EE;
+  --color-caution: #9A651D;
+  --color-danger: #A33A3A;
+  --color-border: #D1CDC4;
+  --color-focus-ring: #1A5752;
+
+  /* ── Spacing (4px scale) ──────────────────────────────────────── */
+  --space-0-5: 4px;
+  --space-1: 8px;
+  --space-1-5: 12px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --space-6: 48px;
+  --space-8: 64px;
+
+  /* ── Radii ────────────────────────────────────────────────────── */
+  --radius-control: 8px;
+  --radius-row: 16px;
+  --radius-panel: 20px;
+  --radius-shell: 28px;
+
+  /* ── Typography ───────────────────────────────────────────────── */
+  --font-ui: 'Atkinson Hyperlegible', system-ui, sans-serif;
+  --font-reading: 'Source Serif 4', Georgia, serif;
+  --text-2xs: 12px;
+  --text-xs: 14px;
+  --text-sm: 16px;
+  --text-base: 16px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-2xl: 32px;
+  --weight-normal: 400;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ── Motion ───────────────────────────────────────────────────── */
+  --duration-inline: 120ms;
+  --duration-state: 180ms;
+  --duration-context: 240ms;
+  --ease-calm: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ── Focus ring ───────────────────────────────────────────────── */
+  --focus-ring-width: 3px;
+  --focus-ring-offset: 2px;
+}
+
+/* ── Low-stimulation dark theme ──────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root.dark {
+    --color-paper: #1A1C1E;
+    --color-surface: #24272A;
+    --color-ink: #E4E2DE;
+    --color-muted: #8A8D91;
+    --color-action: #4DB6AC;
+    --color-action-soft: #1A3A37;
+    --color-caution: #C8912B;
+    --color-danger: #C96363;
+    --color-border: #3A3D40;
+  }
+}

@@ -2054,3 +2054,163 @@ User-authored material is labeled “You wrote” only when it appears alongside
 ## Evidence Excerpts
 
 Source excerpts appear as indented evidence blocks with a source stamp and Open source action. They remain visibly distinct from user and model prose while supporting immediate verification.
+
+## Unsupported Claim Handling
+
+When the system lacks evidence for a claim, it states the uncertainty plainly and offers the next research action. It does not present unsupported synthesis as confident knowledge.
+
+## Quiet Citation Gaps
+
+Weak or missing citations use a quiet inline Needs support marker with an evidence-search action. Gaps are visible during drafting without treating ordinary uncertainty as an error.
+
+## Named Version Checkpoints
+
+Version history uses named checkpoints with a compact diff, such as Before restructure, Draft 2, and Approved export. History stays understandable and recoverable without a developer-style interface.
+
+## Privacy-aware Sharing Review
+
+Sharing or exporting sensitive content runs a provenance and privacy review first. The user sees linked sources and personal references, then chooses whether to include or strip them.
+
+## Meaningful Tone Presets
+
+Companion tone uses a small set of behaviorally meaningful presets: Calm direct, More concise, and More challenging, each with a clear explanation. Tone is configurable without exposing an unconstrained persona prompt.
+
+## Regulation Tone Safety Override
+
+Regulation Mode may override the selected tone only toward calmer, more direct safety language when activation or danger warrants it. Outside these conditions, the user's chosen delivery preference remains in control.
+
+## Situational Autonomy Reinforcement
+
+The companion reinforces autonomy only in high-stakes or repeated reassurance contexts: use the system as a pause and structure, then decide in real life. It avoids repetitive disclaimers that feel cold or scripted.
+
+## Reassurance Loop Redirect
+
+When the user repeats a reassurance question, the system names the loop, restates known facts once, and redirects to the next values-consistent action. The boundary is firm without punishment or shame.
+
+## Inline Reassurance Boundary
+
+Reassurance-loop redirects appear as a calm inline boundary card with one next action. The pattern and path forward stay visible without a blocking modal or punitive tone.
+
+## Evidence-bound Relationship Guidance
+
+Relationship-boundary guidance presents a clear boundary statement, the present behavior it addresses, and one calm question or action. It avoids verdicts about the relationship and vague self-care substitutions.
+
+## Restricted Relationship Records
+
+Safety-sensitive relationship records require an explicit Restricted designation and stay out of ordinary cross-domain suggestions. They are available only where the user intentionally grants relevant context.
+
+## Just-in-time Restricted Linking
+
+Linking a restricted record into a Regulation or relationship session requires just-in-time confirmation showing the exact record and why it may help. Blanket permission and automatic similarity-based linkage are excluded.
+
+## On-demand Context Disclosure
+
+When prior confirmed context influences a suggestion, the UI offers a compact Using this context disclosure on demand. It can show the relevant value, rule, or task without making history omnipresent or hidden.
+
+## Direct Context Correction
+
+The Using this context disclosure includes a direct Correct this context action. Users can edit, unconfirm, or change context scope at the moment it proves wrong or outdated.
+
+## Focused Context Notice
+
+When limited context materially affects an answer for speed or privacy, the UI may say Using focused context. It clarifies important omissions without exposing internal diagnostics in routine use.
+
+## Bounded Low-confidence Answer
+
+When confidence or context is incomplete, the system gives a bounded answer when useful and names the one fact, source, or permission that would improve it. It avoids both stonewalling and generic filler.
+
+## Quiet Loading States
+
+Loading uses quiet structural placeholders that preserve layout without animated shimmer by default. Loading is a brief pause in a stable workspace rather than a visual spectacle.
+
+## Accessible State Announcements
+
+Important state changes use concise screen-reader status messages for saved drafts, mode changes, errors, and safety escalation. Feedback remains informative without narrating every visual change.
+
+## Tablet Content Model
+
+Tablet retains one primary content column with an optional collapsible context panel. It gains space without inheriting a permanent desktop rail or losing the calm mobile mental model.
+
+## Return-position Preservation
+
+Returning to a workspace restores prior scroll position and shows the one-sentence attention anchor only when context changed. The UI preserves momentum without disorienting the user.
+
+## Deliberate External Links
+
+External links show a clear destination preview with an explicit Open externally action. Source navigation remains deliberate without adding an embedded browsing system to the first slice.
+
+## Safe Inline Undo
+
+Reversible actions such as routing, archiving, and non-destructive edits offer a brief inline Undo. Irreversible deletion uses explicit scope review rather than misleading undo behavior.
+
+## Reversible Archive
+
+Archive hides an item from default active views while preserving search, provenance, and a restore action. It is a reversible organizational state, not a disguised delete action.
+
+## Scoped Recently Viewed
+
+Recently viewed is limited to the current workspace and appears only when it helps resume work. The PWA avoids a global activity feed that could feel like surveillance.
+
+## Plain-language Audit Events
+
+Audit and history use plain human actions, such as “You exported Regulation records” or “The system indexed this source locally.” Accountability remains understandable without technical event names.
+
+## Visible Domain-scoped Automations
+
+Future automations are visible, pausable, and scoped by domain. Each explains what runs, why, and when; hidden background behavior is excluded.
+
+## Compact Automation Outcomes
+
+Automation history uses a compact outcome log with optional details, such as “Weekly review prepared; not sent” or “Reminder skipped; paused.” Accountability stays visible without everyday technical traces.
+
+## User-centered Settings Groups
+
+Settings are grouped as Experience, Companion, Reminders, Privacy, and System. Categories reflect user decisions rather than internal module names.
+
+## Consequence-aware Settings
+
+Impactful setting changes show a one-line consequence before saving, such as “Active reminders may appear during related work.” Preferences remain understandable without an overly long confirmation flow.
+
+## Scoped Reset Controls
+
+Reset controls are scoped and explicit: reset Experience, reset Companion preferences, or erase a specific domain. The UI avoids an ambiguous global Reset app action.
+
+## Bounded Historical Import
+
+Historical import uses a selected, bounded, reversible review flow: choose sources, inspect import scope, set processing and retention, then confirm. It does not import everything automatically.
+
+## Import Batch Provenance
+
+Imported content carries a permanent import source stamp and batch reference. Each backfill batch remains inspectable, correctable, and deletable without guessing its origin.
+
+## Reviewable Import Duplicates
+
+Potential imported duplicates appear as a comparison with Keep both, Merge, or Skip. Cleanup preserves provenance and user control rather than silently merging records.
+
+## Plain-language Retrieval Signals
+
+Hybrid retrieval explanations name contributing signals in plain language, such as exact terms, recent use, linked context, or semantic similarity. The UI avoids both opaque relevance and raw ranking internals.
+
+## Local Recent-search Privacy
+
+Search queries are stored locally only as optional, clearable recent-search history. They support resumption and are not used for hidden profiling or automatic personal inference.
+
+## Redacted Restricted Search Results
+
+Restricted search results appear as redacted shells until the user explicitly reveals them. They preserve intentional discoverability while protecting glance privacy in shared spaces.
+
+## Configurable Privacy Lock
+
+The PWA uses a configurable short inactivity timeout and a privacy-safe lock screen with no sensitive previews. It resumes after local authentication without locking on every backgrounding event.
+
+## Privacy-safe Unlock Return
+
+After unlocking, the PWA returns to the prior screen while sensitive fields remain obscured until re-focused. Continuity is preserved without reopening private content at a glance.
+
+## Plain Lock Timeout Control
+
+Lock timeout appears as a plain setting with its consequence explained, for example “Lock after 5 minutes of inactivity.” Privacy controls remain concrete rather than abstract security labels.
+
+## Monthly Model Budget View
+
+System includes a compact monthly model/API budget view with estimated spend, model usage by task class, and an adjustable cap. Cost remains governable without token counters in everyday work.
