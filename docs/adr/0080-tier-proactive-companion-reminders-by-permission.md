@@ -1,0 +1,3 @@
+# Tier Proactive Companion Reminders by Permission
+
+The companion may provide directly relevant Contextual Reminders by default, while Event-Driven Check-Ins require permission scoped to a goal or workflow and Scheduled Reflections are opt-in only. Every reminder must connect current context to confirmed orientation and a useful next action, and Reminder Outcomes reduce badly timed, repetitive, irrelevant, or guilt-inducing behavior. Sensitive Regulation Records cannot be used to surprise the user outside Regulation Mode, trading maximal proactivity for explainable and controllable companionship.

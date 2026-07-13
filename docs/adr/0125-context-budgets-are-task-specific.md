@@ -1,0 +1,3 @@
+# Context Budgets Are Task-Specific
+
+Each Model Route assembles the smallest relevant evidence set within a task-specific context budget: approximately 2–4K tokens for Quick Capture and simple questions, 4–8K for ordinary PKM conversation, 8–16K for study, writing, or Regulation work, and up to 32K for explicit research or review synthesis. Larger contexts require a visible exceptional workflow rather than becoming the daily default. Older conversational state is converted into provenance-preserving typed records or bounded summaries, and complete conversation history is never resent automatically. These limits improve focus, latency, privacy, and cost while preventing a provider's maximum context window from becoming an application target.

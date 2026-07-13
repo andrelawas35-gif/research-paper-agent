@@ -1,0 +1,3 @@
+# Research Workspace Keeps Evidence, Notes, and Synthesis Separate
+
+Source, Synthesis, Taste, and Mentor modes share a Research Workspace with persistent Evidence, Your Knowledge, and Synthesis lanes. Personal Orientation may rank passages, Concepts, explanations, challenge, examples, and next actions, but cannot alter source text, citations, limitations, evidence strength, or provenance; every synthesis claim exposes its supporting Sources, user knowledge, and inference. Mentor lenses retrieve their scoped evidence and remain visible as evidence-grounded frameworks rather than impersonated personas.

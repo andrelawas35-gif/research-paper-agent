@@ -1,0 +1,3 @@
+# Personal Rules Have Explicit Strength and Exceptions
+
+Personal Regulation Rules and Personal Principles carry one of three user-confirmed strengths: Hard Guardrail, Default Principle, or Reflection Prompt. Default Principles may define contextual exceptions, departures are reviewed without shame, and repeated poor outcomes prompt explicit rule review rather than silent weakening; user-owned Hard Guardrails remain revisable outside an activated decision. Non-overridable safety, anti-coercion, anti-surveillance, anti-retaliation, and anti-harm constraints remain system policy rather than masquerading as personal preferences.

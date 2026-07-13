@@ -1,0 +1,3 @@
+# Writing Preserves Layers, Provenance, and Revision Scope
+
+Writing Mode uses a Draft Workspace that separately presents Source material, user-authored text, and agent-proposed revisions, with explicit Polish Preference, Revision Goal, protected phrases, diffs, selective acceptance, and version restoration. Artifact schemas structure only accepted content while retaining authorship, citation, and inference provenance; off-goal improvements are parked and diminishing-return cues offer a stopping point. This adds revision-state complexity but prevents invisible voice replacement, provenance loss, and endless ADHD-amplified polishing.

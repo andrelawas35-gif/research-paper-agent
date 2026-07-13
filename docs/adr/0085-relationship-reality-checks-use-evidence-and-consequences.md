@@ -1,0 +1,3 @@
+# Relationship Reality Checks Use Evidence and Consequences
+
+Relationship Reality Check separates Reported Facts, Corroboration, Interpretations, alternatives, comparable pattern history, harm, urgency, reversibility, boundary relevance, and missing information instead of issuing a single jealousy, dishonesty, or control verdict. It may assess plausibility and recommend the smallest useful clarification or protective action, while Boundary-Relevant Behavior can matter even when motive remains unresolved. This preserves uncertainty while avoiding both reflexive dismissal of valid concerns and escalation from incomplete information.

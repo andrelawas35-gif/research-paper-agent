@@ -1,0 +1,3 @@
+# Regulation Sessions Support Permissioned Pending Outcomes
+
+A Regulation Session may close with a Pending Outcome when the result of its Deliberate Action is not yet known, and a later Regulation Follow-Up occurs only with explicit permission. Regulation Outcome Review distinguishes action completion, later facts, uncertainty, feared outcomes, value and boundary alignment, situation impact, and tactic friction; calmness alone is not treated as success. This enables longitudinal learning while preventing the agent from inferring outcomes from unrelated conversation or nagging the user about sensitive situations without consent.

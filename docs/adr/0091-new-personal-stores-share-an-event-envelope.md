@@ -1,0 +1,3 @@
+# New Personal Stores Share an Event Envelope
+
+Regulation, Values, and Cognitive Support stores will use a shared versioned event envelope and append infrastructure for IDs, timestamps, actor and sensitivity metadata, atomic JSONL writes, validation, schema dispatch, and corruption reporting. Each domain module exclusively owns its event types, payload schemas, transitions, reducers, corrections, deletion semantics, projections, and orientation candidates. Existing Relationship Events will not be migrated until multiple implemented stores demonstrate that the shared infrastructure fits, avoiding both duplicated storage mechanics and a generic personal-data module that owns domain meaning.

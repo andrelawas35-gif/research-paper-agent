@@ -1,0 +1,3 @@
+# Historical Conversations Feed a Reviewed Candidate Queue
+
+Historical conversations may inform companionship only through an explicitly scoped Historical Candidate Import that preserves source references and produces a Candidate Review Queue. The importer may propose values, purpose, principles, goals, cognitive-support observations, and communication preferences, but cannot reconstruct Regulation Sessions, infer diagnoses, create Person Records, equate repeated topics with values, or activate orientation without confirmation. This sacrifices passive completeness so older statements can improve adaptation without silently becoming current identity or expanding intimate-data retention.

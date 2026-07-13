@@ -1,0 +1,3 @@
+# Isolate Regulation History from the General User Model
+
+Regulation Events, Records, and provisional Patterns live in a separate append-only Regulation Store and enter context primarily during Regulation Mode or explicit reflection. Only explicitly confirmed, neutrally phrased Personal Regulation Rules may influence other modes when directly relevant; intimate histories and provisional patterns do not become general identity claims. This preserves useful longitudinal adaptation without making emotionally activated moments disproportionately shape how the Personal Knowledge Manager understands the user everywhere else.

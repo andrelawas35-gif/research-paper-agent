@@ -1,0 +1,3 @@
+# Retrieval Chunks Follow Source Structure and Sensitivity
+
+Retrieval projections use type-specific logical chunks: page- and section-aware Evidence Passages, short Personal Notes and Note Cards, meaningful Work Object sections, approved non-sensitive relationship summaries, active confirmed Values wording, and confirmed Cognitive Support or Regulation rules. Raw conversations, detailed behavioral logs, and raw Regulation Records are not embedded by default; stable item-plus-section identities, version provenance, hashes, sensitivity, confirmation, and Embedding Policy allow changed projections to be invalidated without breaking citations or historical Artifact provenance. This improves retrieval and deletion correctness at the cost of source-specific ingestion logic.

@@ -1,0 +1,3 @@
+# Encrypt Regulation Data at Rest from the First Slice
+
+Regulation Store payloads are Restricted Personal Data and will be encrypted at rest from their first implementation, with keys kept outside the repository and data directory through a local keychain or protected server secret. Event metadata must remain non-revealing, projections are encrypted or generated on demand, raw values are excluded from logs and cache identifiers, exports require explicit authorization, and sensitive backups remain disabled until encrypted backup and key recovery are deliberately configured. This adds key-management and recovery risk but avoids establishing plaintext intimate history on laptops, synced directories, remote VMs, logs, or ordinary backups.

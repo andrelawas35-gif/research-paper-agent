@@ -1,0 +1,3 @@
+# Regulation Pattern Reviews Show Denominators and Uncertainty
+
+Regulation Pattern Reviews require at least three comparable records before proposing recurrence, display counts and denominators, distinguish completed, pending, and unknown outcomes, preserve contradictory examples, and avoid causal or population comparisons. Low logging volume is incomplete evidence rather than poor progress, unusual events may be excluded from aggregation without deletion, and each review proposes at most one user-confirmable focus. This makes longitudinal reflection less dramatic but prevents sparse self-reports from becoming confident claims about personality or strategy effectiveness.

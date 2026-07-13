@@ -1,0 +1,3 @@
+# Code Enforces Orientation Access Before Model Ranking
+
+Personal Orientation Snapshot construction first applies deterministic Orientation Policy for mode access, permission, sensitivity, record status, and explicit scope; only then may model-assisted Orientation Ranking order eligible items by relevance, user priority, confidence, recency, outcomes, and context budget. Explicit requests may widen relevance scope but cannot restore deleted state or bypass safety restrictions. This limits some flexible retrieval while ensuring that sensitive-store isolation is enforced by code rather than depending on the model to obey prompt-level privacy instructions.

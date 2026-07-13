@@ -1,0 +1,3 @@
+# Hybrid Retrieval Starts with Disposable SQLite Vectors
+
+The first production retrieval slice includes SQLite FTS5 plus versioned embedding projections and hybrid rank fusion, using exact vector search at the initial single-user scale. Stable item and chunk IDs, content hashes, embedding model and dimensions, typed provenance, sensitivity, invalidation, and deletion propagation are defined now, while the vector index remains a replaceable adapter and Restricted narrative is excluded by default. A standalone vector database or approximate index is introduced only when measured latency, corpus size, concurrency, or multi-user requirements justify its operational and filtered-recall complexity.

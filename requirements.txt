@@ -9,3 +9,9 @@ PyMuPDF==1.28.0
 Pillow==11.3.0
 python-dotenv>=1.0.0
 ddgs>=6.0.0
+# Milestone 1 — Foundation
+cryptography>=3.4
+fastapi>=0.95,<1.0
+httpx>=0.24,<0.25
+pydantic>=1.10,<2.0
+starlette>=0.27,<0.28

@@ -1,0 +1,3 @@
+# Single Hardened VM with Graceful Degradation
+
+The first daily-use production deployment remains one hardened Oracle VM reached through a private network, with separate web, Discord, and background processes, restart recovery, health checks, interactive-work priority, encrypted off-VM recovery, and no multi-VM high availability. When the model or network is unavailable, the PWA retains an offline safety plan and supports local orientation, existing knowledge, commitments, deletion, export, and encrypted deferred capture where feasible; the product never represents itself as continuously available emergency infrastructure. This focuses reliability work on application maturity, keys, backups, and external-model failure before adding compute redundancy.

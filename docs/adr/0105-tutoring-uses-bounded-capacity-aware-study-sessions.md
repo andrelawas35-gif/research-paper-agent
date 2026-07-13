@@ -1,0 +1,3 @@
+# Tutoring Uses Bounded, Capacity-Aware Study Sessions
+
+Tutor Mode creates Study Sessions with a stated target, available time, current capacity, an orient-learn-recall-apply-close sequence, a Question Parking Lot, and one closing Commitment. Sessions may deepen during hyperfocus, shrink during low capacity, pause, resize, pivot intentionally, or be released without moralizing, while Tutor Progress relies on Concept-specific recall and application evidence rather than reading time, chat volume, or claimed confidence alone. This gives ADHD-aware flexibility without making learning unstructured or equating engagement with mastery.

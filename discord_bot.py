@@ -20,7 +20,63 @@ PROJECT_DIR = Path(__file__).resolve().parent
 load_dotenv(PROJECT_DIR / ".env")
 
 from adk_connectors.discord import DiscordConnector  # noqa: E402
+from adk_connectors.discord.adapter import DiscordAdapter  # noqa: E402
+from adk_connectors.discord.formatter import DiscordFormatter  # noqa: E402
 from .agent import root_agent  # noqa: E402 — must follow .env load
+
+# adk-connector's DiscordAdapter.send_message() passes the full response to
+# channel.send() with no length check, so any reply over Discord's 2000-char
+# message cap gets rejected with a 400 (Invalid Form Body). Patch it here to
+# split long replies into multiple messages instead of forking the package.
+_DISCORD_MSG_LIMIT = 2000
+
+
+def _chunk_for_discord(text: str, limit: int = _DISCORD_MSG_LIMIT) -> list[str]:
+    if not text:
+        return [""]
+    chunks = []
+    while len(text) > limit:
+        split_at = text.rfind("\n", 0, limit)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    chunks.append(text)
+    return chunks
+
+
+async def _send_message_chunked(self, chat_id, message):
+    channel = await self._get_channel(chat_id)
+    if not channel:
+        raise ValueError(f"Channel or User not found for ID: {chat_id}")
+
+    payload = DiscordFormatter.to_api_payload(message)
+    view = payload.get("view")
+
+    reference = None
+    if message.reply_to_message_id:
+        try:
+            import discord
+
+            reference = discord.MessageReference(
+                message_id=int(message.reply_to_message_id),
+                channel_id=channel.id,
+            )
+        except Exception:
+            reference = None
+
+    chunks = _chunk_for_discord(payload.get("content"))
+    sent_msg = None
+    for i, chunk in enumerate(chunks):
+        sent_msg = await channel.send(
+            content=chunk,
+            view=view if i == len(chunks) - 1 else None,
+            reference=reference if i == 0 else None,
+        )
+    return {"message_id": str(sent_msg.id)}
+
+
+DiscordAdapter.send_message = _send_message_chunked
 
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")

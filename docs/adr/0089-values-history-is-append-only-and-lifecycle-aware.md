@@ -1,0 +1,3 @@
+# Values History Is Append-Only and Lifecycle-Aware
+
+The Values Store preserves proposals, confirmations, evidence, corrections, and transitions while a derived Values Compass Projection represents current active orientation. Purpose, Core Values, and Personal Principles may be reaffirmed, placed under review, retired, reframed, or superseded rather than overwritten; ordinary reminders use active items only and historical values cannot be used to guilt the user. This retains developmental continuity and auditability while allowing the user's understanding of purpose and values to genuinely change.

@@ -1,0 +1,3 @@
+# Regulation UI Is a Hybrid Guided Conversation
+
+The web Regulation experience combines one-question-at-a-time conversation with structured state cards showing stage, privacy, recorded facts and interpretations, applicable rules, and user controls for correction, back, skip, pause, close, and safety help. Activation Level reduces density and removes analytics during urgent sessions, while save-and-resume, clear next-step cues, large touch targets, reduced motion, and non-judgmental unfinished states support cognitive accessibility. This avoids both opaque free-form chat and a clinical rigid form while keeping the state machine and data capture inspectable.

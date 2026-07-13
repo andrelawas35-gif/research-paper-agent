@@ -1,0 +1,3 @@
+# Builder Mode Uses a Staged Design Workspace
+
+Builder Mode creates a Design Workspace that moves from raw idea through purpose, constraints, candidate designs, key decisions, risks, evidence, and selection before optionally producing an artifact or experiment. The interface externalizes unresolved decisions, assumptions, provenance, rejected alternatives, and Parked Branches, asks one decision-bearing question at a time, and shows what changed after each answer. This supports exploratory, ADHD-aware design without allowing every adjacent idea to expand scope or treating a cohesive design as automatic authorization to implement it.

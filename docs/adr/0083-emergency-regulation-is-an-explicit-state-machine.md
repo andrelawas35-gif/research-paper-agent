@@ -1,0 +1,3 @@
+# Emergency Regulation Is an Explicit State Machine
+
+An Emergency Regulation Session follows a persisted, user-steerable sequence from a brief Safety Screen through stabilization, evidence separation, emotion and urge identification, option assessment, Deliberate Action, outcome, and closure. Activation Level controls cognitive load, and the user may skip or revisit ordinary stages, change privacy, close without saving, save only a compact pattern, or inspect the record. This adds workflow state but prevents a free-form model response from skipping safety, overwhelming an activated user, reassuring prematurely, or recommending consequential action before the situation is sufficiently structured.

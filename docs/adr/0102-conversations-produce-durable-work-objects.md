@@ -1,0 +1,3 @@
+# Conversations Produce Durable Work Objects
+
+The PWA uses Task Workspaces that pair conversation with one current Work Object, displayed side by side on larger screens and as Conversation and Work tabs on mobile. Source, Synthesis, Builder, Tutor, Writing, Artifact, Relationship, Regulation, and Values interactions create or update typed durable objects with status, provenance, proposal and confirmation state, version history, relationships, and export actions. This adds explicit object lifecycles but prevents valuable results from being trapped in chat history or treated as saved merely because the model said them.

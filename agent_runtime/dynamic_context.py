@@ -176,15 +176,17 @@ def _extract_mode_hint(ctx: Any) -> str:
             pass
 
     # Fall back to scanning the latest user text for mode keywords.
-    text = _extract_latest_user_text(ctx)
+    return _mode_hint_from_text(_extract_latest_user_text(ctx))
+
+
+def _mode_hint_from_text(text: str) -> str:
+    """Scan raw text for a mode-taxonomy keyword. Never raises."""
     if not text:
         return ""
-
     lower = text.lower()
     for keyword, mode_name in _MODE_KEYWORDS.items():
         if keyword in lower:
             return mode_name
-
     return ""
 
 
@@ -624,7 +626,7 @@ _FAST_TOOLS: frozenset[str] = frozenset({
 # Safe: moderate-latency — search, evidence, recommendations.
 _SAFE_TOOLS: frozenset[str] = frozenset({
     "ingest_paper", "ingest_all_papers",
-    "rename_paper", "organize_papers",
+    "rename_paper", "delete_paper", "organize_papers",
     "search_evidence", "search_personal_notes",
     "search_people", "search_web",
     "compare_papers", "make_study_guide",
@@ -638,7 +640,7 @@ _WRITE_TOOLS: frozenset[str] = frozenset({
     "delete_personal_note", "reject_note_card",
     "reject_note_concept", "import_markdown_notes",
     "learn_from_user_message", "set_user_preference",
-    "self_audit_correction",
+    "self_audit_correction", "record_interaction",
     "add_person", "add_relationship_note",
     "log_relationship_interaction", "forget_person",
 })
@@ -651,16 +653,52 @@ _HEAVY_TOOLS: frozenset[str] = frozenset({
     "record_tutor_answer",
 })
 
+# Alias names registered via _aliased_tool(...) in agent.py's tools=[] list.
+# The LLM can call a tool by any of these names, so the budget filter below
+# must allow an alias whenever its canonical name is allowed — otherwise
+# every alias gets silently stripped from every request, on every tier.
+# Keep this in sync with the *_aliased_tool(...) calls in agent.py.
+_TOOL_ALIASES: dict[str, tuple[str, ...]] = {
+    "list_papers": ("list_paper", "show_papers"),
+    "ingest_paper": ("add_paper", "read_paper"),
+    "list_concepts": ("list_concept", "show_concepts"),
+    "search_evidence": ("search_paper", "find_evidence"),
+    "paper_brief": ("brief_paper", "summarize_paper"),
+    "make_study_guide": ("study_guide", "create_study_guide"),
+    "get_user_profile": ("show_profile", "my_profile"),
+    "save_personal_note": ("save_note", "create_note"),
+    "list_personal_notes": ("list_notes", "show_notes"),
+    "get_personal_note": ("get_note", "read_note"),
+    "search_personal_notes": ("search_notes", "find_notes"),
+    "edit_personal_note": ("edit_note", "update_note"),
+    "list_people": ("list_person", "show_people"),
+    "get_person": ("show_person", "find_person"),
+    "search_people": ("search_person", "find_people"),
+    "search_web": ("web_search", "lookup"),
+    "knowledge_self_audit": ("audit", "self_audit"),
+    "record_tutor_answer": ("grade_answer", "tutor_answer"),
+    "get_tutor_progress": ("tutor_progress", "show_progress"),
+}
+
+
+def _expand_aliases(names: frozenset[str]) -> frozenset[str]:
+    """Add each canonical name's registered aliases to an allowed-name set."""
+    expanded = set(names)
+    for canonical, aliases in _TOOL_ALIASES.items():
+        if canonical in names:
+            expanded.update(aliases)
+    return frozenset(expanded)
+
 
 def _allowed_tool_names(budget: str) -> frozenset[str]:
     """Return the set of tool names allowed for a given budget tier."""
     budget = _validate_tier(budget)
     if budget == FAST:
-        return _FAST_TOOLS
+        return _expand_aliases(_FAST_TOOLS)
     if budget == BALANCED:
-        return _FAST_TOOLS | _SAFE_TOOLS | _WRITE_TOOLS
+        return _expand_aliases(_FAST_TOOLS | _SAFE_TOOLS | _WRITE_TOOLS)
     # deep: everything
-    return _FAST_TOOLS | _SAFE_TOOLS | _WRITE_TOOLS | _HEAVY_TOOLS
+    return _expand_aliases(_FAST_TOOLS | _SAFE_TOOLS | _WRITE_TOOLS | _HEAVY_TOOLS)
 
 
 # ======================================================================
@@ -703,7 +741,8 @@ def build_before_model_callback():
                     elif isinstance(last_content, str):
                         text = last_content
                     if text:
-                        budget = _infer_performance_budget_from_text(text)
+                        mode_hint = _extract_mode_hint(callback_context) or _mode_hint_from_text(text)
+                        budget = _infer_performance_budget_from_text(text, mode_hint)
             except Exception:
                 pass  # fall back to balanced
 

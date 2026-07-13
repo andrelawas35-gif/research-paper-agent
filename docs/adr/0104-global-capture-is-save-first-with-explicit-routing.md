@@ -1,0 +1,3 @@
+# Global Capture Is Save-First with Explicit Routing
+
+Every Companion Surface provides Quick Capture that preserves the raw user-owned item before optional extraction, tagging, linking, or organization. The system may present Capture Routing Proposals for notes, sources, people, ideas, goals, commitments, outcomes, or Regulation entry, but each owning store requires explicit routing confirmation and emotionally activated text never silently creates a Regulation Session. This minimizes initiation friction while preventing a single ambiguous statement from being replicated across sensitive stores as if every proposed interpretation were confirmed.

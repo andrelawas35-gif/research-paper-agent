@@ -1,0 +1,3 @@
+# Measure Cognitive Support with Mixed Outcomes
+
+The Cognitive Support Model distinguishes tactic acceptance, runtime-observed Behavioral Support Outcomes, Self-Reported Support Outcomes, repeated contextual usefulness, and explicitly Confirmed Support Defaults. Runtime events establish what followed a tactic but not why, while occasional user feedback captures benefit and friction the runtime cannot see. This mixed evidence model avoids both intrusive constant ratings and unsupported model inference, and repeated success only causes the agent to propose—not silently install—a durable default.

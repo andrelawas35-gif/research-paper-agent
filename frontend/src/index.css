@@ -1,0 +1,95 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-100;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Safe area for notched phones */
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-indigo-600 hover:bg-indigo-500 text-white font-medium
+           py-3 px-6 rounded-lg transition-colors duration-150
+           focus:outline-none focus:ring-2 focus:ring-indigo-400
+           focus:ring-offset-2 focus:ring-offset-slate-900
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium
+           py-3 px-6 rounded-lg transition-colors duration-150
+           focus:outline-none focus:ring-2 focus:ring-slate-400
+           focus:ring-offset-2 focus:ring-offset-slate-900;
+  }
+
+  .btn-danger {
+    @apply bg-red-900/80 hover:bg-red-800 text-red-100 font-medium
+           py-3 px-6 rounded-lg transition-colors duration-150
+           focus:outline-none focus:ring-2 focus:ring-red-400
+           focus:ring-offset-2 focus:ring-offset-slate-900;
+  }
+
+  .card {
+    @apply bg-slate-900 border border-slate-800 rounded-xl p-6
+           shadow-lg;
+  }
+
+  .input-field {
+    @apply w-full bg-slate-800 border border-slate-700 rounded-lg
+           px-4 py-3 text-slate-100 placeholder-slate-500
+           focus:outline-none focus:ring-2 focus:ring-indigo-500
+           focus:border-transparent transition-colors duration-150;
+  }
+
+  .textarea-field {
+    @apply input-field resize-none;
+  }
+
+  .step-indicator {
+    @apply flex items-center justify-center w-8 h-8 rounded-full
+           text-sm font-bold border-2 transition-colors duration-200;
+  }
+
+  .step-active {
+    @apply step-indicator bg-indigo-600 border-indigo-500 text-white;
+  }
+
+  .step-completed {
+    @apply step-indicator bg-emerald-600 border-emerald-500 text-white;
+  }
+
+  .step-pending {
+    @apply step-indicator bg-slate-800 border-slate-700 text-slate-500;
+  }
+
+  .progress-bar {
+    @apply h-1 bg-slate-800 rounded-full overflow-hidden;
+  }
+
+  .progress-fill {
+    @apply h-full bg-indigo-500 rounded-full transition-all duration-500 ease-out;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 3px;
+}

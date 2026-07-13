@@ -1,0 +1,3 @@
+# Safety Branch Overrides Coaching and Minimizes Retention
+
+A positive Safety Screen activates a deterministic Safety Branch that suspends motive analysis, relationship adjudication, long-term pattern work, and ordinary regulation coaching while it supports the next concrete safe action. The branch distinguishes broad risk categories, uses current authoritative sources for location-specific emergency information, and records only a minimal Safety Event by default; crisis content cannot generate Candidate Values, Regulation Patterns, or Cognitive Support conclusions. This limits personalization during the highest-risk moments so immediate safety is not diluted and crisis disclosures do not become durable identity evidence.

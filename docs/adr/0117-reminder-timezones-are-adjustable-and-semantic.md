@@ -1,0 +1,3 @@
+# Reminder Timezones Are Adjustable and Semantic
+
+The Owner Timezone begins as `Asia/Manila` and may be explicitly changed to another IANA timezone such as `America/Los_Angeles`, preserving daylight-saving behavior without relying on fixed UTC offsets or inferred travel. Every schedule declares whether it follows Owner local time, stays fixed to a UTC instant, or remains tied to a named location, and timezone changes preview affected reminders before application. This adds schedule semantics but prevents travel from silently shifting exact appointments or leaving daily routines anchored to a former location.

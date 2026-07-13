@@ -1,0 +1,3 @@
+# Model Proposes; Code Authorizes and Persists
+
+The language model may extract, interpret, compare, synthesize, and recommend, but only domain code may authorize store access, validate typed commands, transition workflow state, apply permissions, encrypt or delete records, and append durable events. Important proposed fields remain correctable before persistence, while candidate, confirmed, and sensitive states cannot be changed through prose alone. This adds typed command and validation work but prevents probabilistic conversation behavior from becoming the authority for safety, identity, privacy, workflow invariants, or durable personal truth.

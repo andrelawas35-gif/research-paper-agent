@@ -1,0 +1,3 @@
+# Single Owner, Private Access, and Explicit Channel Linking
+
+The first companion release supports one internal Owner reached through a private-network-only web application, while Discord access requires an explicit one-time Channel Link from the authenticated Governance Surface. Ownership never derives from names, channels, or ADK sessions; browser sessions expire, sensitive governance may require recent authentication, and Discord cannot export, rotate keys, purge history, or change major privacy controls. This defers public multi-user authentication while preventing convenient external channel identities from becoming accidental authority over Restricted Personal Data.

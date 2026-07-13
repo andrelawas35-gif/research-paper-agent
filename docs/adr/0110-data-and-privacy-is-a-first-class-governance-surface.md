@@ -1,0 +1,3 @@
+# Data and Privacy Is a First-Class Governance Surface
+
+Settings includes a Data and Privacy Center that maps every store to its purpose, sensitivity, mode access, reminder permissions, channel links, encryption, retention, backup status, export, correction, deletion, audit history, and projection rebuild state. It supports mode-specific Personal Orientation previews, key-recovery testing, scoped or complete export and deletion, and recent re-authentication with impact previews for dangerous operations, without manipulative retention language. This makes the agent's adaptation and Restricted Personal Data governable through the product rather than through scattered settings or conversational promises.

@@ -1,0 +1,3 @@
+# Personalization Enters Through Task-Scoped Orientation
+
+Canonical personal state remains divided among the User Model, Values Compass, Cognitive Support Model, Regulation Store, Relationship Store, Notes Store, and learning state, while a read-only Personal Orientation Snapshot becomes the single seam through which selected state reaches the model. Each Orientation Item retains provenance, status, confidence, and sensitivity; selection is task- and mode-scoped, conflicts remain visible, and the snapshot cannot be written directly. This adds projection logic but prevents duplicated canonical truth, unbounded prompt dumps, accidental sensitive-context leakage, and inconsistent personalization paths across modes.

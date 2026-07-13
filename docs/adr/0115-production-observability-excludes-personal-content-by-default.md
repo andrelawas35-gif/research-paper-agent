@@ -1,0 +1,3 @@
+# Production Observability Excludes Personal Content by Default
+
+Production logs and metrics contain operational metadata such as latency, token use, error category, workflow state, retrieval counts, projection health, reminders, backups, and key-provider status, while raw prompts, responses, notes, Regulation fields, relationship details, passages, decrypted events, embeddings, and tool payloads remain excluded. Content-free Access Audits record authenticated operations and permission decisions, and any content-level debugging requires an explicit, previewed, redacted, expiring Diagnostic Session. This reduces default debugging detail so Restricted Personal Data is not silently copied into indefinite service logs or external observability systems.

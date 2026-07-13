@@ -1,0 +1,3 @@
+# Reviews Remain Domain-Separated and Unscored
+
+The Reviews Workspace separates knowledge, values, regulation, cognitive support, relationships, and system-belief audits, and every finding retains domain evidence plus controls to confirm, correct, reject, exclude, delete, or turn it into one chosen Goal or Commitment. Cross-domain synthesis occurs only on explicit request and preserves the source domain of each conclusion, while global self-improvement, stability, productivity, relationship-quality, and personal-worth scores are prohibited. Taste Mode judges the usefulness of sources, projects, notes, and workflows rather than the user's worth.

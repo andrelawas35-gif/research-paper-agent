@@ -1,0 +1,3 @@
+# Regulation Has a Deterministic Offline Protocol
+
+If the external model is unavailable, too slow, rate-limited, or fails structured-output validation, Regulation Mode explicitly switches to a deterministic local protocol rather than improvising with an unqualified response. The protocol preserves access to confirmed values, personal rules, approved grounding actions, and safety resources; guides the user through facts, interpretation, emotion, urge, and the safest reversible next action; and avoids truth judgments or relationship verdicts. Safety escalation cannot be downgraded, and an optional personalized follow-up may be queued without delaying immediate support. Model failure therefore reduces personalization, not access to a predictable safety-aware intervention.

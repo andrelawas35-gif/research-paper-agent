@@ -1,0 +1,3 @@
+# Production Readiness Requires Six Evaluation Suites
+
+The companion is production-ready only after passing domain-invariant, privacy-and-access, Regulation behavior, personalization, hybrid-retrieval, and end-to-end UX suites. Tests cover reducers and transitions, encryption and deletion, unauthorized context leakage, Safety Branch behavior, anti-reassurance and anti-coercion properties, evidence thresholds, retrieval quality and provenance, stale-vector removal, private sessions, imports, correction, key recovery, and channel revocation. Automated fixtures use synthetic sensitive scenarios, and model evaluations assert required and prohibited behavioral properties rather than exact prose or copies of the Owner's real Restricted Personal Data.

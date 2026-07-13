@@ -1,0 +1,3 @@
+# Regulation Mode Optimizes for User-Aligned Action
+
+Regulation Mode may assess whether an interpretation such as dishonesty, manipulation, or a boundary violation is supported, but its primary objective is recommending what best supports the user's welfare, values, boundaries, and long-term outcomes. This was chosen over optimizing for immediate emotional relief or acting as a relationship truth detector because useful action often must be selected while another person's motives remain uncertain; the mode must therefore label facts, interpretations, and uncertainty rather than manufacture certainty or reassurance.

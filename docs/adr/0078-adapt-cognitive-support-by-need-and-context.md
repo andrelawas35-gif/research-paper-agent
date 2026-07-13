@@ -1,0 +1,3 @@
+# Adapt Cognitive Support by Need and Context
+
+ADHD-aware behavior will evolve into a Cognitive Support Model with separate dimensions for working memory, task initiation, sustained attention, task switching, planning, motivation, recovery, and emotional activation. The model learns from context-specific Support Outcomes and asks for confirmation before promoting a Cognitive Support Tactic to a durable default; a user-provided ADHD label may supply context but cannot determine capability or explain every behavior. This enables meaningful adaptation across study, building, reflection, and Regulation Mode without globally lowering expectations or turning a diagnosis into identity.

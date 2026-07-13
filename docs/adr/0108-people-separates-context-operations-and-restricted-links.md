@@ -1,0 +1,3 @@
+# People Separates Context, Operations, and Restricted Links
+
+Each Person page separates Overview, Relationship Context, Interactions, Relationship Operations, Connections, and Privacy, so private knowledge does not silently become an action or reminder. Regulation Records remain owned by the Regulation Store and appear only as restricted links until deliberately opened; professional drafting may be requested, intimate communication defaults to angles rather than finished messages, and sending always requires confirmation. Relationship health scores and rankings are excluded in favor of explainable state labels, open loops, provenance, and user-controlled sensitivity, retention, redaction, forgetting, and export.

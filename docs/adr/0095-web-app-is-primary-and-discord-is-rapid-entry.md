@@ -1,0 +1,3 @@
+# Web App Is Primary and Discord Is Rapid Entry
+
+A responsive installable web application will be the primary Companion Surface and Governance Surface, while Discord remains a rapid-entry channel for capture, Emergency Regulation Sessions, focus starts, brief orientation, and outcome recording. Both surfaces address the same root agent and personal-data owner, but sensitive review, evidence inspection, correction, deletion, value lifecycle, adaptation controls, privacy, and export belong in the web application. This preserves mobile convenience without forcing complex, high-consequence governance into Discord's linear chat interface.
