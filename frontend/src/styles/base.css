@@ -1,8 +1,17 @@
 /* ── Accessibility and global base ─────────────────────────────────── */
 
+/* Safe-area padding utilities — referenced by layout components */
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 /* Focus ring — visible on keyboard, hidden on mouse */
 :focus-visible {
-  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
 }
 
@@ -27,14 +36,21 @@
   top: var(--space-2);
 }
 
-/* Reduced motion */
+/* Reduced motion — state changes become instant,
+   but focus indicators, status text, and layout remain stable */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+
+  :focus-visible {
+    transition: none !important;
   }
 }
 
@@ -48,14 +64,14 @@
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
-  border-width: 0;
+  border: 0;
 }
 
-/* Safe area for notched phones */
-.safe-top {
-  padding-top: env(safe-area-inset-top);
+/* Scrollbar hide for horizontal-scroll containers */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
-
-.safe-bottom {
-  padding-bottom: env(safe-area-inset-bottom);
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
 }

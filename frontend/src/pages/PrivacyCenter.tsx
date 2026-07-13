@@ -8,7 +8,9 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import * as api from '../api/client';
-import type { SessionSummary, RegulationSession } from '../api/client';
+import type { SessionSummary } from '../api/client';
+import { StatusNotice } from '../components/StatusNotice';
+import { SourceStamp } from '../components/SourceStamp';
 
 type Tab = 'sessions' | 'export' | 'audit' | 'retention';
 
@@ -112,7 +114,7 @@ export default function PrivacyCenter() {
             key={tab.id}
             className={`flex-1 pb-3 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.id
-                ? 'border-indigo-500 text-action'
+                ? 'border-action text-action'
                 : 'border-transparent text-muted hover:text-ink'
             }`}
             onClick={() => {
@@ -127,15 +129,11 @@ export default function PrivacyCenter() {
       </div>
 
       {message && (
-        <div className="bg-emerald-900/30 border border-emerald-800 rounded-control p-3 text-emerald-200 text-sm mb-4">
-          {message}
-        </div>
+        <StatusNotice variant="confirmation">{message}</StatusNotice>
       )}
 
       {error && (
-        <div className="bg-danger/10/40 border border-danger rounded-control p-3 text-danger text-sm mb-4">
-          {error}
-        </div>
+        <StatusNotice variant="error">{error}</StatusNotice>
       )}
 
       {/* Sessions tab */}
@@ -171,18 +169,22 @@ export default function PrivacyCenter() {
                 <p className="font-medium text-ink">
                   {s.trigger_event || 'Untitled'}
                 </p>
+                <SourceStamp
+                  sourceType="note"
+                  date={s.created_at}
+                  sensitivity={s.is_private ? 'identity_shaping' : 'low'}
+                />
                 <p className="text-muted text-xs">
-                  {s.created_at} • {s.state}
-                  {s.is_private ? ' • Private' : ' • Saved'}
-                  {s.safety_active ? ' • Safety Active' : ''}
+                  {s.state}{s.is_private ? ' · Private' : ' · Saved'}
+                  {s.safety_active ? ' · Safety Active' : ''}
                 </p>
-                <p className="text-slate-600 text-xs">
-                  {s.fact_count} facts • {s.emotion_count} emotions •{' '}
+                <p className="text-muted text-xs">
+                  {s.fact_count} facts · {s.emotion_count} emotions ·{' '}
                   {s.action_count} actions
                 </p>
               </div>
               <button
-                className="text-danger hover:text-red-300 text-sm ml-4 shrink-0"
+                className="text-danger hover:text-danger/70 text-sm ml-4 shrink-0"
                 onClick={() => handleDelete(s.session_id)}
                 disabled={loading}
               >

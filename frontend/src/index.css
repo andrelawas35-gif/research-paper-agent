@@ -4,6 +4,7 @@
 
 @import './styles/tokens.css';
 @import './styles/base.css';
+@import '/fonts/fonts.css';
 
 @tailwind base;
 @tailwind components;
@@ -88,9 +89,54 @@
   .notice-safety {
     @apply bg-danger/10 border-danger/30 text-danger;
   }
+  .notice-error {
+    @apply bg-danger/5 border-danger/20 text-danger;
+  }
+  .notice-confirmation {
+    @apply bg-action-soft/50 border-action/20 text-action;
+  }
 
   .source-stamp {
     @apply text-xs text-muted flex items-center gap-1;
+  }
+
+  /* ── Annotation rail ─────────────────────────────────────────── */
+  .annotation-rail {
+    @apply flex flex-col gap-1;
+  }
+
+  .annotation-node {
+    @apply flex items-center gap-2 px-2 py-1 rounded-control;
+  }
+
+  .annotation-node.active {
+    @apply bg-action-soft text-action font-semibold;
+  }
+  .annotation-node.completed {
+    @apply text-muted;
+  }
+  .annotation-node.future {
+    @apply text-muted/50;
+  }
+
+  .annotation-dot {
+    @apply inline-block w-2 h-2 rounded-full shrink-0;
+  }
+  .annotation-dot.active {
+    @apply bg-action;
+  }
+  .annotation-dot.completed {
+    @apply bg-action/50;
+  }
+  .annotation-dot.future {
+    @apply bg-border;
+  }
+
+  /* ── Card interactive ────────────────────────────────────────── */
+  .card-action {
+    @apply hover:border-action/30 hover:shadow-sm
+           active:scale-[0.99]
+           transition-all duration-state ease-calm;
   }
 
   .divider {

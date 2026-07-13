@@ -4,7 +4,7 @@ import PrivacyCenter from './pages/PrivacyCenter';
 import { NowScreen } from './pages/NowScreen';
 import { FocusedFlowNav } from './components/Navigation';
 import { StatusNotice } from './components/StatusNotice';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 
 function App() {
   const location = useLocation();

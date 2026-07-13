@@ -58,7 +58,7 @@ export default {
         context: '240ms',
       },
       transitionTimingFunction: {
-        'calm-ease': 'cubic-bezier(0.4, 0, 0.2, 1)',
+        calm: 'cubic-bezier(0.4, 0, 0.2, 1)',
       },
       ringWidth: {
         3: '3px',

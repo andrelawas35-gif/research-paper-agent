@@ -1,7 +1,10 @@
 import { Surface, Row } from '../components/Surface';
 import { Button } from '../components/Button';
 import { StatusNotice } from '../components/StatusNotice';
+import { Dialog } from '../components/Dialog';
+import { AppNav } from '../components/Navigation';
 import { useNavigate } from 'react-router-dom';
+import { useState } from 'react';
 
 interface NowScreenProps {
   offline: boolean;
@@ -10,9 +13,17 @@ interface NowScreenProps {
 
 export function NowScreen({ offline, degraded }: NowScreenProps) {
   const navigate = useNavigate();
+  const [discardOpen, setDiscardOpen] = useState(false);
 
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const date = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+
+  const navItems = [
+    { label: 'Now', href: '/', active: true, icon: '○' },
+    { label: 'Chat', href: '/chat', disabled: true, icon: '○' },
+    { label: 'Work', href: '/work', disabled: true, icon: '○' },
+    { label: 'Compass', href: '/compass', disabled: true, icon: '○' },
+  ];
 
   return (
     <div className="max-w-lg mx-auto px-4 py-8 flex flex-col gap-6">
@@ -58,16 +69,35 @@ export function NowScreen({ offline, degraded }: NowScreenProps) {
       {/* ── Private Regulation draft card ──────────────────────── */}
       <Surface>
         <p className="text-xs text-muted uppercase tracking-wide mb-2">Unfinished session</p>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3">
           <div>
             <p className="text-sm font-semibold">Private draft available</p>
             <p className="text-xs text-muted">Saved earlier today</p>
           </div>
-          <Button variant="secondary" onClick={() => navigate('/regulation')}>
-            Resume
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => navigate('/regulation')}>
+              Resume
+            </Button>
+            <Button variant="tertiary" onClick={() => navigate('/regulation?action=retention')}>
+              Change retention
+            </Button>
+            <Button variant="tertiary" onClick={() => setDiscardOpen(true)}>
+              Discard
+            </Button>
+          </div>
         </div>
       </Surface>
+
+      <Dialog
+        open={discardOpen}
+        onConfirm={() => { setDiscardOpen(false); /* TODO: call session.expire */ }}
+        onCancel={() => setDiscardOpen(false)}
+        title="Discard draft?"
+        confirmLabel="Discard"
+        destructive
+      >
+        This will permanently remove the unfinished Regulation session. You can start a new one at any time.
+      </Dialog>
 
       {/* ── Action rows ────────────────────────────────────────── */}
       <Surface>
@@ -92,7 +122,7 @@ export function NowScreen({ offline, degraded }: NowScreenProps) {
       )}
 
       {/* ── Privacy link ───────────────────────────────────────── */}
-      <div className="text-center">
+      <div className="text-center pb-2">
         <button
           onClick={() => navigate('/privacy')}
           className="text-xs text-muted hover:text-ink transition-colors duration-inline"
@@ -100,6 +130,9 @@ export function NowScreen({ offline, degraded }: NowScreenProps) {
           Data & Privacy
         </button>
       </div>
+
+      {/* ── Bottom navigation ──────────────────────────────────── */}
+      <AppNav items={navItems} />
     </div>
   );
 }

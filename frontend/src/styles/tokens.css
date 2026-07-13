@@ -53,19 +53,25 @@
   /* ── Focus ring ───────────────────────────────────────────────── */
   --focus-ring-width: 3px;
   --focus-ring-offset: 2px;
+  --focus-ring-color: #1A5752;
+
+  /* ── Safe areas ───────────────────────────────────────────────── */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-/* ── Low-stimulation dark theme ──────────────────────────────────── */
-@media (prefers-color-scheme: dark) {
-  :root.dark {
-    --color-paper: #1A1C1E;
-    --color-surface: #24272A;
-    --color-ink: #E4E2DE;
-    --color-muted: #8A8D91;
-    --color-action: #4DB6AC;
-    --color-action-soft: #1A3A37;
-    --color-caution: #C8912B;
-    --color-danger: #C96363;
-    --color-border: #3A3D40;
-  }
+/* ── Low-stimulation dark tokens ────────────────────────────────────
+   Defined now for future dark workspace screens.                      */
+
+[data-theme='dark'] {
+  --color-paper: #1A1D21;
+  --color-surface: #24272B;
+  --color-ink: #E6E0D8;
+  --color-muted: #8C8F93;
+  --color-action: #4DB8AD;
+  --color-action-soft: #1A2F2D;
+  --color-caution: #D4A44C;
+  --color-danger: #D46666;
+  --color-border: #3A3D42;
+  --color-focus-ring: #4DB8AD;
 }

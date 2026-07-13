@@ -16,3 +16,4 @@ papers/*
 !.adk/.gitkeep
 node_modules/
 *.db
+frontend/dist/

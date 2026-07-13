@@ -1,10 +1,10 @@
 /**
  * RegulationFlow — Guided PWA Regulation check-in (U1).
  *
- * Implements the trigger → facts → interpretations → emotions →
- * urges → actions → outcome flow with explicit steps, progress
- * indicator, pause/resume, capture confirmation, offline rules,
- * and safety resources.
+ * Steps: Facts → Story → Emotion → Urge → Action.
+ * Safety check runs inline before Facts. Trigger starts the session.
+ * Uses AnnotationRail for progress, RegulationPromptField for input,
+ * and StatusNotice/SourceStamp for model-assisted and degraded states.
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -15,23 +15,22 @@ import type {
   AssistResult,
   SafetyResources,
 } from '../api/client';
-import ProgressBar from '../components/ProgressBar';
-import SafetyResourcesPanel from '../components/SafetyResourcesPanel';
+import { AnnotationRail } from '../components/AnnotationRail';
+import { StatusNotice } from '../components/StatusNotice';
+import { SourceStamp } from '../components/SourceStamp';
 
 // ── Step definitions ────────────────────────────────────────────────
 
 const STEPS = [
-  { id: 'trigger', label: 'Trigger', number: 1 },
-  { id: 'safety', label: 'Safety', number: 2 },
-  { id: 'facts', label: 'Facts', number: 3 },
-  { id: 'interpret', label: 'Interpret', number: 4 },
-  { id: 'emotions', label: 'Emotions', number: 5 },
-  { id: 'urges', label: 'Urges', number: 6 },
-  { id: 'actions', label: 'Actions', number: 7 },
-  { id: 'outcome', label: 'Outcome', number: 8 },
+  { id: 'facts', label: 'Facts', number: 1 },
+  { id: 'interpret', label: 'Story', number: 2 },
+  { id: 'emotions', label: 'Emotion', number: 3 },
+  { id: 'urges', label: 'Urge', number: 4 },
+  { id: 'actions', label: 'Action', number: 5 },
 ] as const;
 
-type StepId = (typeof STEPS)[number]['id'];
+type ContentStepId = (typeof STEPS)[number]['id'];
+type StepId = 'trigger' | 'safety' | ContentStepId | 'outcome';
 
 // ── Sub-components ──────────────────────────────────────────────────
 
@@ -92,17 +91,13 @@ function TriggerStep({
   );
 }
 
-function SafetyStep({
-  session,
-  onComplete,
-  loading,
-  error,
-}: {
+function SafetyStep(_props: {
   session: RegulationSession;
   onComplete: (category: string) => void;
   loading: boolean;
   error: string;
 }) {
+  const { onComplete, loading, error } = _props;
   const [category, setCategory] = useState('none');
   const [resources, setResources] = useState<SafetyResources | null>(null);
 
@@ -136,8 +131,8 @@ function SafetyStep({
             key={cat.value}
             className={`w-full text-left p-4 rounded-control border transition-colors ${
               category === cat.value
-                ? 'border-indigo-500 bg-action/10 text-indigo-200'
-                : 'border-border bg-paper/50 text-ink hover:border-border'
+                ? 'border-action bg-action-soft text-action'
+                : 'border-border bg-surface text-ink hover:border-muted'
             }`}
             onClick={() => setCategory(cat.value)}
           >
@@ -148,11 +143,19 @@ function SafetyStep({
       </div>
 
       {selectedCat && selectedCat.value !== 'none' && resources && (
-        <div className="bg-amber-900/30 border border-amber-800 rounded-control p-4">
-          <SafetyResourcesPanel
-            category={category}
-            resources={resources.resources}
-          />
+        <div className="bg-caution/10 border border-caution/30 rounded-control p-4">
+          <h3 className="font-semibold text-caution mb-2">
+            Safety resources for {selectedCat.label}
+          </h3>
+          <div className="space-y-2 text-sm text-ink">
+            <p>{resources.resources.message || 'Resources are available.'}</p>
+            {resources.resources.international && (
+              <p><span className="font-medium text-caution">International: </span>{resources.resources.international}</p>
+            )}
+            {resources.resources.us && (
+              <p><span className="font-medium text-caution">US: </span>{resources.resources.us}</p>
+            )}
+          </div>
         </div>
       )}
 
@@ -241,7 +244,7 @@ function FactsStep({
                 step="0.1"
                 value={item.certainty}
                 onChange={(e) => updateItem(i, 'certainty', parseFloat(e.target.value))}
-                className="flex-1 accent-indigo-500"
+                className="flex-1 accent-action"
                 disabled={loading}
               />
               <span className="text-sm text-ink w-8">
@@ -346,7 +349,7 @@ function InterpretationsStep({
                 step="0.1"
                 value={item.plausibility}
                 onChange={(e) => updateItem(i, 'plausibility', parseFloat(e.target.value))}
-                className="flex-1 accent-indigo-500"
+                className="flex-1 accent-action"
                 disabled={loading}
               />
               <span className="text-sm text-ink w-8">
@@ -381,10 +384,10 @@ function InterpretationsStep({
       </button>
 
       {validItems.length === 1 && (
-        <div className="bg-amber-900/30 border border-amber-800 rounded-control p-3 text-amber-200 text-sm">
+        <StatusNotice variant="caution">
           Consider adding at least one more interpretation that doesn't assume bad
           intent. This helps avoid jumping to conclusions.
-        </div>
+        </StatusNotice>
       )}
 
       <button
@@ -464,8 +467,8 @@ function EmotionsStep({
             key={emotion}
             className={`px-3 py-2 rounded-control text-sm font-medium transition-colors ${
               selected[emotion]
-                ? 'bg-action text-white'
-                : 'bg-paper text-muted hover:bg-slate-700'
+                ? 'bg-action text-surface'
+                : 'bg-paper text-muted hover:bg-action-soft'
             }`}
             onClick={() => toggleEmotion(emotion)}
             disabled={loading}
@@ -487,7 +490,7 @@ function EmotionsStep({
             max="10"
             value={intensity}
             onChange={(e) => setIntensity(label, parseInt(e.target.value))}
-            className="w-full accent-indigo-500"
+            className="w-full accent-action"
             disabled={loading}
           />
         </div>
@@ -513,6 +516,7 @@ function EmotionsStep({
 }
 
 function UrgesStep({
+  session,
   onComplete,
   loading,
 }: {
@@ -577,7 +581,7 @@ function UrgesStep({
                 max="10"
                 value={item.strength}
                 onChange={(e) => updateItem(i, 'strength', parseInt(e.target.value))}
-                className="flex-1 accent-indigo-500"
+                className="flex-1 accent-action"
                 disabled={loading}
               />
               <span className="text-sm text-ink w-6">{item.strength}</span>
@@ -611,7 +615,7 @@ function ActionsStep({
   onComplete,
   assistResult,
   loading,
-  skipAssist,
+  skipAssist: _skipAssist,
 }: {
   session: RegulationSession;
   onComplete: (
@@ -648,27 +652,31 @@ function ActionsStep({
         </p>
       </div>
 
-      {assistResult && !assistResult.is_degraded && assistResult.model_response && (
-        <div className="bg-indigo-900/20 border border-indigo-800 rounded-control p-4">
-          <h3 className="text-sm font-semibold text-action mb-2">
-            AI Suggestions
-          </h3>
+      {assistResult && !assistResult.is_degraded && !!assistResult.model_response && (
+        <div className="bg-action-soft border border-action/20 rounded-row p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-action">AI Suggestion</h3>
+            <SourceStamp sourceType="model" date={new Date().toLocaleDateString()} />
+          </div>
           <p className="text-sm text-ink whitespace-pre-wrap">
-            {(assistResult.model_response as Record<string, unknown>).uncertainty as string || ''}
+            {(() => {
+              const resp = assistResult.model_response as Record<string, unknown>;
+              return typeof resp.uncertainty === 'string' ? resp.uncertainty : '';
+            })()}
           </p>
+          {assistResult.requires_owner_confirm?.length > 0 && (
+            <p className="text-xs text-caution mt-2">
+              This suggestion requires your confirmation before proceeding.
+            </p>
+          )}
         </div>
       )}
 
       {assistResult?.is_degraded && (
-        <div className="bg-amber-900/20 border border-amber-800 rounded-control p-4">
-          <p className="text-sm text-amber-200">
-            AI assistance is unavailable. The offline protocol is active —
-            your own judgment is the guide here.
-          </p>
-          <button className="btn-secondary mt-3 text-sm" onClick={skipAssist}>
-            Dismiss
-          </button>
-        </div>
+        <StatusNotice variant="capability">
+          AI assistance is unavailable. The offline protocol is active —
+          your own judgment is the guide here.
+        </StatusNotice>
       )}
 
       <div className="space-y-4">
@@ -750,7 +758,7 @@ function ActionsStep({
 }
 
 function OutcomeStep({
-  session,
+  session: _session,
   onComplete,
   loading,
 }: {
@@ -782,8 +790,8 @@ function OutcomeStep({
         <button
           className={`px-6 py-2 rounded-control font-medium transition-colors ${
             wasHelpful === true
-              ? 'bg-action text-white'
-              : 'bg-paper text-muted hover:bg-slate-700'
+              ? 'bg-action text-surface'
+              : 'bg-paper text-muted hover:bg-action-soft'
           }`}
           onClick={() => setWasHelpful(true)}
           disabled={loading}
@@ -793,8 +801,8 @@ function OutcomeStep({
         <button
           className={`px-6 py-2 rounded-control font-medium transition-colors ${
             wasHelpful === false
-              ? 'bg-red-600 text-white'
-              : 'bg-paper text-muted hover:bg-slate-700'
+              ? 'bg-danger text-surface'
+              : 'bg-paper text-muted hover:bg-action-soft'
           }`}
           onClick={() => setWasHelpful(false)}
           disabled={loading}
@@ -860,9 +868,9 @@ function CompletedView({ session }: { session: RegulationSession }) {
           </p>
         )}
         {session.is_private && (
-          <p className="text-amber-300 text-xs">
+          <StatusNotice variant="caution">
             This was a Private Check-In — not saved to durable history.
-          </p>
+          </StatusNotice>
         )}
       </div>
 
@@ -1071,7 +1079,6 @@ export default function RegulationFlow() {
   };
 
   const stepIndex = STEPS.findIndex((s) => s.id === currentStep);
-  const progress = isComplete ? 100 : (stepIndex / (STEPS.length - 1)) * 100;
 
   return (
     <div className="max-w-lg mx-auto px-4 py-6 safe-bottom">
@@ -1093,13 +1100,12 @@ export default function RegulationFlow() {
         <div className="w-12" /> {/* spacer */}
       </div>
 
-      {/* Progress bar */}
-      {!isComplete && (
+      {/* Annotation rail */}
+      {!isComplete && currentStep !== 'trigger' && currentStep !== 'safety' && (
         <div className="mb-6">
-          <ProgressBar
-            steps={STEPS}
-            currentStep={currentStep}
-            completed={isComplete}
+          <AnnotationRail
+            steps={STEPS.map((s) => ({ label: s.label, state: 'future' }))}
+            currentIndex={stepIndex}
           />
         </div>
       )}
@@ -1177,7 +1183,7 @@ export default function RegulationFlow() {
             {session.is_private ? ' Private' : ' Saved'} •
             Step {stepIndex + 1} of {STEPS.length}
           </p>
-          <p className="text-xs text-slate-600 mt-1">
+          <p className="text-xs text-muted mt-1">
             You can close this page and come back — your progress is preserved.
           </p>
         </div>
