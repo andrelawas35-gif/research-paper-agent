@@ -2,6 +2,14 @@ import { useState } from 'react';
 import { Button } from '../components/Button';
 import { StatusNotice } from '../components/StatusNotice';
 import { Surface } from '../components/Surface';
+import {
+  addDeferredCapture,
+  deleteOfflineOrientation,
+  exportOfflineOrientation,
+  hasOfflineOrientation,
+  loadOfflineOrientation,
+  type OfflineOrientation,
+} from '../offline/orientationStore';
 
 const STEPS = [
   ['Trigger', 'What happened in one sentence? Use only what a camera could record.'],
@@ -14,9 +22,47 @@ const STEPS = [
 export function OfflineRegulationProtocol() {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<string[]>(() => STEPS.map(() => ''));
+  const [pin, setPin] = useState('');
+  const [orientation, setOrientation] = useState<OfflineOrientation | null>(null);
+  const [orientationError, setOrientationError] = useState('');
+  const [pendingText, setPendingText] = useState('');
 
   const update = (value: string) => {
     setAnswers((current) => current.map((answer, index) => (index === step ? value : answer)));
+  };
+
+  const unlockOrientation = async () => {
+    try {
+      setOrientation(await loadOfflineOrientation(pin));
+      setOrientationError('');
+    } catch (cause) {
+      setOrientationError((cause as Error).message);
+    }
+  };
+
+  const deferCapture = async () => {
+    try {
+      await addDeferredCapture(pendingText, pin);
+      setOrientation(await loadOfflineOrientation(pin));
+      setPendingText('');
+      setOrientationError('');
+    } catch (cause) {
+      setOrientationError((cause as Error).message);
+    }
+  };
+
+  const downloadOrientation = async () => {
+    try {
+      const content = await exportOfflineOrientation(pin);
+      const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'pkm-offline-orientation.json';
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (cause) {
+      setOrientationError((cause as Error).message);
+    }
   };
 
   return (
@@ -36,6 +82,41 @@ export function OfflineRegulationProtocol() {
           <li>Elsewhere: findahelpline.com</li>
         </ul>
       </Surface>
+
+      {hasOfflineOrientation() && (
+        <Surface>
+          <h2 className="font-semibold text-ink">Your offline orientation</h2>
+          {!orientation ? (
+            <div className="space-y-3 mt-3">
+              <p className="text-sm text-muted">Unlock the encrypted snapshot stored on this device.</p>
+              <input aria-label="Offline passphrase" className="input-field" type="password" autoComplete="current-password" value={pin} onChange={(event) => setPin(event.target.value)} />
+              <Button onClick={() => void unlockOrientation()} disabled={pin.length < 8}>Unlock snapshot</Button>
+            </div>
+          ) : (
+            <div className="space-y-3 mt-3 text-sm">
+              {[
+                ['Values', orientation.confirmedValues],
+                ['Rules', orientation.personalRules],
+                ['Grounding actions', orientation.groundingActions],
+                ['Commitments', orientation.commitments],
+              ].map(([label, items]) => (
+                <div key={label as string}>
+                  <h3 className="font-medium text-ink">{label as string}</h3>
+                  {(items as string[]).length ? <ul className="list-disc pl-5 text-muted">{(items as string[]).map((item) => <li key={item}>{item}</li>)}</ul> : <p className="text-muted">None cached.</p>}
+                </div>
+              ))}
+              <p className="text-muted">Pending owner review: {orientation.deferredCaptures.length}</p>
+              <textarea aria-label="Deferred offline capture" className="textarea-field h-24" placeholder="Optional note to review when you are back online" value={pendingText} onChange={(event) => setPendingText(event.target.value)} />
+              <div className="flex gap-2">
+                <Button onClick={() => void deferCapture()} disabled={!pendingText.trim()}>Encrypt for later review</Button>
+                <Button variant="secondary" onClick={() => void downloadOrientation()}>Export</Button>
+              </div>
+            </div>
+          )}
+          {orientationError && <p role="alert" className="text-sm text-danger mt-3">{orientationError}</p>}
+          <button className="text-sm text-danger mt-4" onClick={() => { if (confirm('Delete the offline snapshot and pending captures from this device?')) { deleteOfflineOrientation(); setOrientation(null); } }}>Delete offline data</button>
+        </Surface>
+      )}
 
       <div className="flex gap-1" aria-label={`Step ${step + 1} of ${STEPS.length}`}>
         {STEPS.map((_, index) => (

@@ -15,6 +15,16 @@ fi
 
 SSH=(ssh -o StrictHostKeyChecking=accept-new "${SSH_USER}@${VM_HOST}")
 
+REMOTE_ENV_PRESENT="$("${SSH[@]}" "test -f /etc/pkm/pkm.env && printf yes || printf no")"
+INSTALL_COMMAND="sudo bash"
+if [[ "$REMOTE_ENV_PRESENT" != "yes" ]]; then
+  : "${OCI_RECORD_KEY_NAMESPACE:?Set OCI_RECORD_KEY_NAMESPACE for the first deployment}"
+  : "${OCI_RECORD_KEY_BUCKET:?Set OCI_RECORD_KEY_BUCKET for the first deployment}"
+  printf -v INSTALL_COMMAND \
+    'sudo env OCI_RECORD_KEY_NAMESPACE=%q OCI_RECORD_KEY_BUCKET=%q bash' \
+    "$OCI_RECORD_KEY_NAMESPACE" "$OCI_RECORD_KEY_BUCKET"
+fi
+
 "${SSH[@]}" "rm -rf '$REMOTE_STAGE' && mkdir -p '$REMOTE_STAGE'"
 rsync -az --delete \
   --exclude '.git' \
@@ -32,7 +42,7 @@ rsync -az --delete \
   --exclude 'backups' \
   "$ROOT_DIR/" "${SSH_USER}@${VM_HOST}:${REMOTE_STAGE}/"
 
-"${SSH[@]}" "sudo bash '$REMOTE_STAGE/deploy/install-oracle-vm.sh' '$REMOTE_STAGE'"
+"${SSH[@]}" "${INSTALL_COMMAND} '$REMOTE_STAGE/deploy/install-oracle-vm.sh' '$REMOTE_STAGE'"
 "${SSH[@]}" "rm -rf '$REMOTE_STAGE'"
 
 echo

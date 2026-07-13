@@ -255,6 +255,11 @@ class TriggerSession:
     # Version for optimistic concurrency
     version: int = 1
 
+    # Present only after raw session content has been compacted. This keeps
+    # aggregate reflection signals available without reconstructing fake
+    # actions, outcomes, or narrative content.
+    compact_record: Optional["RegulationRecord"] = None
+
     def is_durable(self) -> bool:
         """Private check-ins are not added to durable regulation history."""
         return not self.is_private
@@ -262,6 +267,78 @@ class TriggerSession:
     def is_safety_active(self) -> bool:
         """Returns True if the safety branch is currently overriding coaching."""
         return self.safety_state.is_active and self.safety_state.category != SafetyCategory.NONE
+
+
+@dataclass(frozen=True)
+class RegulationRecord:
+    """Compact durable outcome of a completed Regulation Session.
+
+    It deliberately excludes trigger narrative, facts, interpretations, urge
+    text, action text, outcome text, names, and relationship specifics.
+    """
+
+    session_id: str
+    owner_id: str
+    emotion_labels: Tuple[EmotionLabel, ...]
+    peak_emotion_intensity: int
+    action_count: int
+    reversible_action_count: int
+    longest_wait_minutes: int
+    helpful_outcome_count: int
+    unhelpful_outcome_count: int
+    safety_category: SafetyCategory
+    safety_resources_provided: bool
+    created_at: str
+    completed_at: str
+    retention_days: int
+    source_session_version: int
+
+
+def compact_regulation_record(session: TriggerSession) -> RegulationRecord:
+    """Discard raw narrative and retain only approved reflection signals."""
+    if session.is_private:
+        raise ValueError("Private Check-Ins cannot become durable records")
+    if session.state != SessionState.COMPLETED or session.completed_at is None:
+        raise ValueError("Only completed Regulation Sessions can be compacted")
+
+    previous = session.compact_record
+    previous_labels = previous.emotion_labels if previous is not None else ()
+    emotion_labels = tuple(dict.fromkeys(
+        (*previous_labels, *(item.label for item in session.emotions))
+    ))
+    return RegulationRecord(
+        session_id=session.session_id,
+        owner_id=session.owner_id,
+        emotion_labels=emotion_labels,
+        peak_emotion_intensity=max(
+            previous.peak_emotion_intensity if previous else 0,
+            max((item.intensity for item in session.emotions), default=0),
+        ),
+        action_count=(previous.action_count if previous else 0) + len(session.actions),
+        reversible_action_count=(
+            (previous.reversible_action_count if previous else 0)
+            + sum(item.reversible for item in session.actions)
+        ),
+        longest_wait_minutes=max(
+            previous.longest_wait_minutes if previous else 0,
+            max((item.waiting_period_minutes for item in session.actions), default=0),
+        ),
+        helpful_outcome_count=(previous.helpful_outcome_count if previous else 0) + sum(
+            item.was_helpful is True for item in session.outcomes
+        ),
+        unhelpful_outcome_count=(previous.unhelpful_outcome_count if previous else 0) + sum(
+            item.was_helpful is False for item in session.outcomes
+        ),
+        safety_category=(previous.safety_category if previous else session.safety_state.category),
+        safety_resources_provided=(
+            previous.safety_resources_provided
+            if previous else session.safety_state.resources_provided
+        ),
+        created_at=previous.created_at if previous else session.created_at,
+        completed_at=session.completed_at,
+        retention_days=session.retention_days,
+        source_session_version=session.version,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -320,6 +397,7 @@ def _new_version(session: TriggerSession, **overrides: Any) -> TriggerSession:
         "completed_at": session.completed_at,
         "correlation_id": session.correlation_id,
         "version": session.version + 1,
+        "compact_record": session.compact_record,
     }
     kwargs.update(overrides)
     return TriggerSession(**kwargs)

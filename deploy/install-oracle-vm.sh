@@ -58,7 +58,7 @@ if ! id pkm >/dev/null 2>&1; then
 fi
 
 install -d -o pkm -g pkm -m 0700 /var/lib/pkm /var/lib/pkm/audit
-install -d -o root -g pkm -m 0750 /etc/pkm /etc/pkm/keys
+install -d -o root -g pkm -m 0750 /etc/pkm
 install -d -o pkm -g pkm -m 0755 "$APP_ROOT/releases"
 install -d -o pkm -g pkm -m 0755 "$RELEASE_DIR"
 
@@ -75,14 +75,9 @@ runuser -u pkm -- "$RELEASE_DIR/.venv/bin/pip" install -r "$RELEASE_DIR/requirem
 runuser -u pkm -- bash -lc "cd '$RELEASE_DIR/frontend' && npm ci && npm run build && rm -rf node_modules"
 
 OWNER_KEY=""
-if [[ ! -s /etc/pkm/keys/regulation.key ]]; then
-  echo "Missing /etc/pkm/keys/regulation.key. Provision a 32-byte hex key from an off-VM password manager before deploying." >&2
-  exit 3
-fi
-chown root:pkm /etc/pkm/keys/regulation.key
-chmod 0640 /etc/pkm/keys/regulation.key
-
 if [[ ! -f /etc/pkm/pkm.env ]]; then
+  : "${OCI_RECORD_KEY_NAMESPACE:?Set OCI_RECORD_KEY_NAMESPACE when creating /etc/pkm/pkm.env}"
+  : "${OCI_RECORD_KEY_BUCKET:?Set OCI_RECORD_KEY_BUCKET when creating /etc/pkm/pkm.env}"
   OWNER_KEY="$(openssl rand -hex 32)"
   OWNER_HASH="$(printf '%s' "$OWNER_KEY" | sha256sum | cut -d' ' -f1)"
   cat > /etc/pkm/pkm.env <<EOF
@@ -90,7 +85,10 @@ PKM_OWNER_ID=owner
 PKM_API_KEY_HASH=${OWNER_HASH}
 PKM_DATA_DIR=/var/lib/pkm
 AUDIT_LOG_DIR=/var/lib/pkm/audit
-REGULATION_KEY_PATH=/etc/pkm/keys/regulation.key
+REGULATION_RECORD_KEY_PROVIDER=oci
+OCI_RECORD_KEY_NAMESPACE=${OCI_RECORD_KEY_NAMESPACE}
+OCI_RECORD_KEY_BUCKET=${OCI_RECORD_KEY_BUCKET}
+OCI_RECORD_KEY_PREFIX=pkm-record-keys/
 OPENAI_API_KEY=
 OPENAI_GPT5_MINI_MODEL=gpt-5-mini
 OPENAI_GPT5_MODEL=gpt-5
@@ -99,6 +97,18 @@ EOF
   chown root:pkm /etc/pkm/pkm.env
   chmod 0640 /etc/pkm/pkm.env
 fi
+
+set -a
+# shellcheck disable=SC1091
+source /etc/pkm/pkm.env
+set +a
+: "${PKM_API_KEY_HASH:?PKM_API_KEY_HASH is required in /etc/pkm/pkm.env}"
+[[ "${REGULATION_RECORD_KEY_PROVIDER:-}" == "oci" ]] || {
+  echo "REGULATION_RECORD_KEY_PROVIDER=oci is required" >&2
+  exit 3
+}
+: "${OCI_RECORD_KEY_NAMESPACE:?OCI_RECORD_KEY_NAMESPACE is required}"
+: "${OCI_RECORD_KEY_BUCKET:?OCI_RECORD_KEY_BUCKET is required}"
 
 ln -sfn "$RELEASE_DIR" "$APP_ROOT/current"
 chown -h pkm:pkm "$APP_ROOT/current"

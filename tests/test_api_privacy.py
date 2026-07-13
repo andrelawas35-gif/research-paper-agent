@@ -17,6 +17,7 @@ from agent_runtime.api_privacy import create_privacy_router
 from agent_runtime.api_regulation import create_regulation_router
 from agent_runtime.model_provider import FakeProvider
 from agent_runtime.stores import StoreRegistry
+from agent_runtime.emotional_regulation import start_trigger_check_in
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────
@@ -171,6 +172,58 @@ class TestDeleteSession:
         # Verify all gone
         res = client.get("/api/privacy/sessions")
         assert len(res.json()["sessions"]) == 0
+
+    def test_failed_key_deletion_keeps_session_in_memory(self, registry):
+        from fastapi import FastAPI
+
+        session = start_trigger_check_in("test-owner", "still recoverable")
+        sessions = {session.session_id: session}
+
+        class FailingPersistence:
+            def delete_session(self, session_id: str) -> None:
+                raise RuntimeError("key custody unavailable")
+
+        app = FastAPI()
+        app.include_router(create_privacy_router(
+            store_registry=registry,
+            owner_id="test-owner",
+            sessions_dict=sessions,
+            rules_dict={},
+            persistence=FailingPersistence(),
+        ))
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            response = failing_client.delete(
+                f"/api/privacy/sessions/{session.session_id}"
+            )
+
+        assert response.status_code == 500
+        assert session.session_id in sessions
+
+    def test_failed_bulk_key_deletion_keeps_sessions_in_memory(self, registry):
+        from fastapi import FastAPI
+
+        session = start_trigger_check_in("test-owner", "still recoverable")
+        sessions = {session.session_id: session}
+
+        class FailingPersistence:
+            def delete_all_sessions(self) -> None:
+                raise RuntimeError("key custody unavailable")
+
+        app = FastAPI()
+        app.include_router(create_privacy_router(
+            store_registry=registry,
+            owner_id="test-owner",
+            sessions_dict=sessions,
+            rules_dict={},
+            persistence=FailingPersistence(),
+        ))
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            response = failing_client.delete("/api/privacy/sessions")
+
+        assert response.status_code == 500
+        assert session.session_id in sessions
 
 
 # ── Export tests ─────────────────────────────────────────────────────

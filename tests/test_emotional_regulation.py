@@ -20,6 +20,7 @@ from agent_runtime.emotional_regulation import (
     Outcome,
     PersonalOrientationSnapshot,
     PersonalRegulationRule,
+    RegulationRecord,
     RegulationStateError,
     RuleStrength,
     SafetyCategory,
@@ -31,6 +32,7 @@ from agent_runtime.emotional_regulation import (
     start_trigger_check_in,
     record_trigger_response,
     complete_trigger_check_in,
+    compact_regulation_record,
     complete_safety_screen,
     expire_session,
     # R3 — Deterministic protocol
@@ -452,6 +454,57 @@ class TestCompleteTriggerCheckIn:
         s = start_trigger_check_in("owner_1", "test")
         with pytest.raises(RegulationStateError):
             complete_trigger_check_in(s)
+
+
+class TestRegulationRecordCompaction:
+    def test_completed_session_compacts_without_raw_narrative(self):
+        session = TriggerSession(
+            session_id="reg_compact",
+            owner_id="owner_1",
+            trigger_event="A private accusation with intimate detail",
+            state=SessionState.COMPLETED,
+            facts=[
+                Fact(
+                    text="A private message contained intimate detail",
+                    certainty=1.0,
+                    source="user_report",
+                )
+            ],
+            interpretations=[
+                Interpretation(text="They meant to humiliate me", plausibility=0.6)
+            ],
+            emotions=[Emotion(label=EmotionLabel.HURT, intensity=8)],
+            urges=[Urge(text="Interrogate them repeatedly", strength=9)],
+            actions=[
+                Action(
+                    text="Wait before asking one calm question",
+                    reversible=True,
+                    waiting_period_minutes=30,
+                )
+            ],
+            outcomes=[Outcome(text="Waiting reduced activation", was_helpful=True)],
+            completed_at="2026-07-13T12:00:00+00:00",
+        )
+
+        record = compact_regulation_record(session)
+
+        assert isinstance(record, RegulationRecord)
+        assert record.session_id == session.session_id
+        assert record.emotion_labels == (EmotionLabel.HURT,)
+        assert record.peak_emotion_intensity == 8
+        assert record.action_count == 1
+        assert record.longest_wait_minutes == 30
+        assert record.helpful_outcome_count == 1
+        serialized = repr(record)
+        for raw_text in (
+            session.trigger_event,
+            session.facts[0].text,
+            session.interpretations[0].text,
+            session.urges[0].text,
+            session.actions[0].text,
+            session.outcomes[0].text,
+        ):
+            assert raw_text not in serialized
 
     def test_cannot_complete_already_completed(self):
         s = TriggerSession(

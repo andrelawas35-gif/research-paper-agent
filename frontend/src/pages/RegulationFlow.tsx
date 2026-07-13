@@ -98,13 +98,15 @@ function SafetyStep(_props: {
   loading: boolean;
   error: string;
 }) {
-  const { onComplete, loading, error } = _props;
-  const [category, setCategory] = useState('none');
+  const { session, onComplete, loading, error } = _props;
+  const [category, setCategory] = useState(
+    session.safety_state.category || 'none',
+  );
   const [resources, setResources] = useState<SafetyResources | null>(null);
 
   useEffect(() => {
-    api.safety.getResources().then(setResources).catch(() => {});
-  }, []);
+    api.safety.getResources(category).then(setResources).catch(() => {});
+  }, [category]);
 
   const categories = [
     { value: 'none', label: 'No safety concern', description: 'Continue to coaching' },
@@ -126,7 +128,7 @@ function SafetyStep(_props: {
         </p>
       </div>
 
-      <div className="space-y-3">
+      {session.state !== 'safety_branch' && <div className="space-y-3">
         {categories.map((cat) => (
           <button
             key={cat.value}
@@ -141,7 +143,13 @@ function SafetyStep(_props: {
             <div className="text-sm text-muted">{cat.description}</div>
           </button>
         ))}
-      </div>
+      </div>}
+
+      {session.state === 'safety_branch' && (
+        <StatusNotice variant="safety">
+          Safety support is active. Regulation coaching is paused. Contact an appropriate person or service now; this app is not emergency infrastructure.
+        </StatusNotice>
+      )}
 
       {selectedCat && selectedCat.value !== 'none' && resources && (
         <div className="bg-caution/10 border border-caution/30 rounded-control p-4">
@@ -156,6 +164,9 @@ function SafetyStep(_props: {
             {resources.resources.us && (
               <p><span className="font-medium text-caution">US: </span>{resources.resources.us}</p>
             )}
+            {resources.resources.ph && (
+              <p><span className="font-medium text-caution">Philippines: </span>{resources.resources.ph}</p>
+            )}
           </div>
         </div>
       )}
@@ -166,7 +177,7 @@ function SafetyStep(_props: {
         </div>
       )}
 
-      <div className="flex gap-3">
+      {session.state !== 'safety_branch' && <div className="flex gap-3">
         <button
           className="btn-primary flex-1"
           disabled={loading}
@@ -174,7 +185,7 @@ function SafetyStep(_props: {
         >
           {loading ? 'Processing...' : 'Continue'}
         </button>
-      </div>
+      </div>}
     </div>
   );
 }
@@ -659,6 +670,12 @@ function ActionsStep({
   };
 
   const validItems = items.filter((i) => i.text.trim());
+  const assistedText = (() => {
+    const response = assistResult?.model_response;
+    if (!response || typeof response !== 'object') return '';
+    const uncertainty = (response as Record<string, unknown>).uncertainty;
+    return typeof uncertainty === 'string' ? uncertainty.trim() : '';
+  })();
 
   return (
     <div className="space-y-6">
@@ -672,18 +689,13 @@ function ActionsStep({
         </p>
       </div>
 
-      {assistResult && !assistResult.is_degraded && !!assistResult.model_response && (
+      {assistResult && !assistResult.is_degraded && assistedText && (
         <div className="bg-action-soft border border-action/20 rounded-row p-4">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-sm font-semibold text-action">AI Suggestion</h3>
             <SourceStamp sourceType="model" date={new Date().toLocaleDateString()} />
           </div>
-          <p className="text-sm text-ink whitespace-pre-wrap">
-            {(() => {
-              const resp = assistResult.model_response as Record<string, unknown>;
-              return typeof resp.uncertainty === 'string' ? resp.uncertainty : '';
-            })()}
-          </p>
+          <p className="text-sm text-ink whitespace-pre-wrap">{assistedText}</p>
           {assistResult.requires_owner_confirm?.length > 0 && (
             <p className="text-xs text-caution mt-2">
               This suggestion requires your confirmation before proceeding.
@@ -794,8 +806,8 @@ function OutcomeStep({
       <div className="text-4xl mb-4">✅</div>
       <h2 className="text-xl font-semibold">Check-in complete</h2>
       <p className="text-muted text-sm">
-        Great job working through this. How did it go? Recording the outcome
-        helps you learn what works for you.
+        The structured check-in is saved. Recording the outcome can help you
+        evaluate what actually worked without assuming the feared result.
       </p>
 
       <textarea
@@ -808,7 +820,7 @@ function OutcomeStep({
 
       <div className="flex justify-center gap-3">
         <button
-          className={`px-6 py-2 rounded-control font-medium transition-colors ${
+          className={`min-h-11 px-6 py-2 rounded-control font-medium transition-colors ${
             wasHelpful === true
               ? 'bg-action text-surface'
               : 'bg-paper text-muted hover:bg-action-soft'
@@ -819,7 +831,7 @@ function OutcomeStep({
           Helpful
         </button>
         <button
-          className={`px-6 py-2 rounded-control font-medium transition-colors ${
+          className={`min-h-11 px-6 py-2 rounded-control font-medium transition-colors ${
             wasHelpful === false
               ? 'bg-danger text-surface'
               : 'bg-paper text-muted hover:bg-action-soft'
@@ -1243,7 +1255,11 @@ function OnlineRegulationFlow() {
           <p className="text-xs text-muted">
             Session {session.session_id.slice(0, 8)}... •
             {session.is_private ? ' Private' : ' Saved'} •
-            Step {stepIndex + 1} of {STEPS.length}
+            {currentStep === 'safety' && session.state === 'safety_branch'
+              ? ' Safety support active'
+              : currentStep === 'outcome'
+              ? ' Optional outcome follow-up'
+              : ` Step ${stepIndex + 1} of ${STEPS.length}`}
           </p>
           <p className="text-xs text-muted mt-1">
             You can close this page and come back — your progress is preserved.
@@ -1254,7 +1270,7 @@ function OnlineRegulationFlow() {
   );
 }
 
-export default function RegulationFlow() {
+export default function RegulationFlow({ forceOffline = false }: { forceOffline?: boolean }) {
   const [offline, setOffline] = useState(!navigator.onLine);
 
   useEffect(() => {
@@ -1268,5 +1284,5 @@ export default function RegulationFlow() {
     };
   }, []);
 
-  return offline ? <OfflineRegulationProtocol /> : <OnlineRegulationFlow />;
+  return offline || forceOffline ? <OfflineRegulationProtocol /> : <OnlineRegulationFlow />;
 }

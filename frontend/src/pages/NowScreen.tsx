@@ -78,11 +78,10 @@ export function NowScreen() {
         </div>
         <button
           type="button"
-          className="w-10 h-10 rounded-full bg-action-soft flex items-center justify-center text-action font-bold text-lg"
+          className="w-11 h-11 rounded-full bg-action-soft flex items-center justify-center text-action font-bold text-lg"
           aria-label="Lock workspace"
           onClick={() => {
-            api.clearApiKey();
-            window.location.reload();
+            void api.lock().finally(() => window.location.reload());
           }}
         >
           P
@@ -155,7 +154,7 @@ export function NowScreen() {
       <div className="text-center pb-2">
         <button
           onClick={() => navigate('/privacy')}
-          className="text-xs text-muted hover:text-ink transition-colors duration-inline"
+          className="min-h-11 px-3 text-xs text-muted hover:text-ink transition-colors duration-inline"
         >
           Data & Privacy
         </button>

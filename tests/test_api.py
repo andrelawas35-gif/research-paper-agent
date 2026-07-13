@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from agent_runtime.api import (
     verify_api_key,
 )
 from agent_runtime.stores import StoreRegistry
+from agent_runtime.auth_sessions import OwnerSessionManager
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -65,6 +67,14 @@ def client(config: ApiConfig, registry: StoreRegistry, audit: AuditLogger) -> Te
         owner_id="test-owner",
     )
     return TestClient(app)
+
+
+def session_headers(client: TestClient) -> dict[str, str]:
+    response = client.post(
+        "/api/auth/session", headers={"X-API-Key": "test-api-key"}
+    )
+    assert response.status_code == 201
+    return {"Authorization": f"Bearer {response.json()['token']}"}
 
 
 # ── API Key Verification ─────────────────────────────────────────────
@@ -116,17 +126,81 @@ class TestHealthEndpoints:
         assert "general_pkm_store" in data["checks"]
         assert "regulation_store" in data["checks"]
 
+    def test_ready_degrades_when_external_key_custody_is_unavailable(
+        self, config: ApiConfig, registry: StoreRegistry, audit: AuditLogger
+    ) -> None:
+        def unavailable() -> None:
+            raise RuntimeError("provider unavailable")
+
+        app = create_app(
+            store_registry=registry,
+            config=config,
+            audit=audit,
+            readiness_checks={"record_key_provider": unavailable},
+        )
+
+        response = TestClient(app).get("/health/ready")
+
+        assert response.status_code == 503
+        assert response.json()["checks"]["record_key_provider"] == "error"
+
 
 # ── Authentication ───────────────────────────────────────────────────
 
 
 class TestAuthentication:
+    def test_owner_key_exchanges_for_server_session(self, client: TestClient) -> None:
+        login = client.post(
+            "/api/auth/session", headers={"X-API-Key": "test-api-key"}
+        )
+
+        assert login.status_code == 201
+        body = login.json()
+        assert body["token"]
+        assert body["expires_at"]
+        response = client.get(
+            "/api/me", headers={"Authorization": f"Bearer {body['token']}"}
+        )
+        assert response.status_code == 200
+        assert response.json()["authenticated"] is True
+
+    def test_sensitive_governance_requires_recent_auth(
+        self,
+        config: ApiConfig,
+        registry: StoreRegistry,
+        audit: AuditLogger,
+    ) -> None:
+        now = [datetime(2026, 7, 13, tzinfo=timezone.utc)]
+        sessions = OwnerSessionManager(clock=lambda: now[0])
+        app = create_app(
+            store_registry=registry,
+            config=config,
+            audit=audit,
+            owner_id="test-owner",
+            auth_sessions=sessions,
+        )
+        scoped_client = TestClient(app)
+        token = scoped_client.post(
+            "/api/auth/session", headers={"X-API-Key": "test-api-key"}
+        ).json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        now[0] += timedelta(minutes=6)
+
+        assert scoped_client.get(
+            "/api/privacy/sessions", headers=headers
+        ).status_code == 200
+        response = scoped_client.post(
+            "/api/privacy/export", headers=headers, json={"scope": "all"}
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Recent owner authentication required"
+
     def test_protected_endpoint_requires_auth(self, client: TestClient) -> None:
         response = client.get("/api/me")
         assert response.status_code == 401
 
-    def test_protected_endpoint_with_valid_key(self, client: TestClient) -> None:
-        response = client.get("/api/me", headers={"X-API-Key": "test-api-key"})
+    def test_protected_endpoint_with_valid_session(self, client: TestClient) -> None:
+        response = client.get("/api/me", headers=session_headers(client))
         assert response.status_code == 200
         data = response.json()
         assert data["owner_id"] == "test-owner"
@@ -156,7 +230,7 @@ class TestAuthentication:
     def test_discarding_private_session_removes_it_from_memory(
         self, client: TestClient
     ) -> None:
-        headers = {"X-API-Key": "test-api-key"}
+        headers = session_headers(client)
         created = client.post(
             "/api/regulation/sessions",
             headers=headers,
@@ -185,8 +259,9 @@ class TestAudit:
 
     def test_audit_returns_metadata_only(self, client: TestClient) -> None:
         # Make a request to generate audit entry
-        client.get("/api/me", headers={"X-API-Key": "test-api-key"})
-        response = client.get("/api/audit", headers={"X-API-Key": "test-api-key"})
+        headers = session_headers(client)
+        client.get("/api/me", headers=headers)
+        response = client.get("/api/audit", headers=headers)
         assert response.status_code == 200
         data = response.json()
         assert "count" in data
@@ -208,7 +283,7 @@ class TestStoreSummary:
     def test_returns_event_counts(self, client: TestClient) -> None:
         response = client.get(
             "/api/stores/summary",
-            headers={"X-API-Key": "test-api-key"},
+            headers=session_headers(client),
         )
         assert response.status_code == 200
         data = response.json()

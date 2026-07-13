@@ -14,9 +14,9 @@ Provides:
 - Consent: consent management endpoints
 - Access audit: metadata-only access log
 
-The current persistence slice performs verified logical deletion from active
-replay. Per-record key destruction remains a daily-use launch gate, so this API
-must not describe logical deletion as cryptographic erasure.
+Durable Regulation deletion destroys the independent record key. Retained
+database and backup ciphertext becomes unreadable immediately even though
+storage-level snapshot retention may continue.
 """
 
 import json
@@ -66,6 +66,23 @@ def _retention_expiry(session: TriggerSession) -> str:
     return (created + delta).isoformat(timespec="seconds")
 
 
+def _compact_record_dict(session: TriggerSession) -> Dict[str, Any] | None:
+    record = session.compact_record
+    if record is None:
+        return None
+    return {
+        "emotion_labels": [label.value for label in record.emotion_labels],
+        "peak_emotion_intensity": record.peak_emotion_intensity,
+        "action_count": record.action_count,
+        "reversible_action_count": record.reversible_action_count,
+        "longest_wait_minutes": record.longest_wait_minutes,
+        "helpful_outcome_count": record.helpful_outcome_count,
+        "unhelpful_outcome_count": record.unhelpful_outcome_count,
+        "safety_category": record.safety_category.value,
+        "safety_resources_provided": record.safety_resources_provided,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Router factory
 # ═══════════════════════════════════════════════════════════════════════
@@ -79,6 +96,7 @@ def create_privacy_router(
     rules_dict: Optional[Dict[str, PersonalRegulationRule]] = None,
     persistence: Optional["EncryptedRegulationPersistence"] = None,
     auth_dependency: Any = None,
+    recent_auth_dependency: Any = None,
 ) -> APIRouter:
     """Create the Privacy Center API router.
 
@@ -92,11 +110,20 @@ def create_privacy_router(
         Configured APIRouter with all Privacy endpoints.
     """
     dependencies = [Depends(auth_dependency)] if auth_dependency is not None else []
+    recent_dependencies = (
+        [Depends(recent_auth_dependency)]
+        if recent_auth_dependency is not None
+        else []
+    )
     router = APIRouter(
         prefix="/api/privacy", tags=["privacy"], dependencies=dependencies
     )
     _sessions = sessions_dict if sessions_dict is not None else {}
     _rules = rules_dict if rules_dict is not None else {}
+
+    def _purge_expired() -> None:
+        if persistence is not None:
+            persistence.purge_expired_sessions(_sessions)
 
     # ── Summary ──────────────────────────────────────────────────────
 
@@ -106,6 +133,7 @@ def create_privacy_router(
 
         Returns counts only — no content or sensitive data.
         """
+        _purge_expired()
         durable = [
             s for s in _sessions.values()
             if not s.is_private and s.state == SessionState.COMPLETED
@@ -133,6 +161,7 @@ def create_privacy_router(
     @router.get("/sessions")
     async def list_sessions(request: Request) -> Dict[str, Any]:
         """List all Regulation sessions (summary only, no content)."""
+        _purge_expired()
         all_sessions = sorted(
             _sessions.values(),
             key=lambda s: s.created_at,
@@ -150,8 +179,15 @@ def create_privacy_router(
                     "safety_active": s.is_safety_active(),
                     "emotion_count": len(s.emotions),
                     "fact_count": len(s.facts),
-                    "action_count": len(s.actions),
-                    "outcome_count": len(s.outcomes),
+                    "action_count": (
+                        s.compact_record.action_count
+                        if s.compact_record else len(s.actions)
+                    ),
+                    "outcome_count": (
+                        s.compact_record.helpful_outcome_count
+                        + s.compact_record.unhelpful_outcome_count
+                        if s.compact_record else len(s.outcomes)
+                    ),
                     "expires_at": _retention_expiry(s),
                 }
                 for s in all_sessions
@@ -167,6 +203,7 @@ def create_privacy_router(
         Returns the complete session data including facts, interpretations,
         emotions, urges, actions, and outcomes.
         """
+        _purge_expired()
         session = _sessions.get(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -232,43 +269,47 @@ def create_privacy_router(
             "completed_at": session.completed_at,
             "expires_at": _retention_expiry(session),
             "version": session.version,
+            "compact_record": _compact_record_dict(session),
         }
 
     # ── Deletion ─────────────────────────────────────────────────────
 
-    @router.delete("/sessions/{session_id}")
+    @router.delete(
+        "/sessions/{session_id}", dependencies=recent_dependencies
+    )
     async def delete_session(
         request: Request, session_id: str
     ) -> Dict[str, Any]:
         """Delete a single Regulation session.
 
-        Deletion is verified: the session must exist and is removed from active
-        replay. Historical encrypted snapshots remain until storage and backup
-        retention removes them.
+        Deletion is verified: the session must exist, its record keys are
+        destroyed, and it is removed from active replay. Historical encrypted
+        snapshots may remain physically retained but cannot be decrypted.
         """
-        session = _sessions.pop(session_id, None)
+        session = _sessions.get(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         if persistence is not None and not session.is_private:
             persistence.delete_session(session_id)
+        _sessions.pop(session_id, None)
         return {
             "session_id": session_id,
             "deleted": True,
             "deleted_at": _now_iso(),
         }
 
-    @router.delete("/sessions")
+    @router.delete("/sessions", dependencies=recent_dependencies)
     async def delete_all_sessions(request: Request) -> Dict[str, Any]:
         """Delete all Regulation sessions.
 
-        This is a bulk operation. Private check-ins are also removed from
-        memory. Durable historical ciphertext remains subject to storage and
-        backup retention.
+        This is a bulk operation. Private check-ins are removed from memory and
+        every durable session/record key is destroyed. Historical ciphertext
+        may remain subject to backup retention but cannot be decrypted.
         """
         count = len(_sessions)
-        _sessions.clear()
         if persistence is not None:
             persistence.delete_all_sessions()
+        _sessions.clear()
 
         return {
             "deleted_count": count,
@@ -277,7 +318,7 @@ def create_privacy_router(
 
     # ── Export ───────────────────────────────────────────────────────
 
-    @router.post("/export")
+    @router.post("/export", dependencies=recent_dependencies)
     async def export_data(request: Request) -> Dict[str, Any]:
         """Export all Regulation data as JSON.
 
@@ -290,6 +331,7 @@ def create_privacy_router(
         is explicitly requesting it. The export is downloaded client-side
         and not stored on the server.
         """
+        _purge_expired()
         body = await request.json() if await request.body() else {}
         scope = body.get("scope", "all")
 
@@ -329,6 +371,7 @@ def create_privacy_router(
                 "safety_category": s.safety_state.category.value,
                 "created_at": s.created_at,
                 "completed_at": s.completed_at,
+                "compact_record": _compact_record_dict(s),
             })
 
         export_rules = [
@@ -388,6 +431,7 @@ def create_privacy_router(
     @router.get("/retention")
     async def retention_info(request: Request) -> Dict[str, Any]:
         """Get retention policy and session expiry information."""
+        _purge_expired()
         now = datetime.now(timezone.utc)
         expiring = []
 
@@ -416,7 +460,7 @@ def create_privacy_router(
 
     # ── Consent ──────────────────────────────────────────────────────
 
-    @router.put("/consent")
+    @router.put("/consent", dependencies=recent_dependencies)
     async def update_consent(request: Request) -> Dict[str, Any]:
         """Update a consent setting.
 

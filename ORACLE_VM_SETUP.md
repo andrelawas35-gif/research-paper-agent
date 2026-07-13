@@ -17,23 +17,34 @@ Stop → Edit → Shape → 4 OCPU / 24 GB → Save → Start**. Capacity can be
 temporarily unavailable; keeping the existing instance and retrying the resize
 is safer than deleting it.
 
-## 2. First deployment
+## 2. Provision off-VM record-key custody
 
-Generate the Regulation recovery key on your Mac, save it in your password
-manager, and provision the live copy before the first deployment:
+In the OCI Console, create a private Standard Object Storage bucket named, for
+example, `pkm-record-keys`. Leave versioning **Disabled** and add no retention
+rule. This bucket stores only independently destructible random data-encryption
+keys; Regulation ciphertext remains on the VM and in Restic.
 
-```bash
-umask 077
-openssl rand -hex 32 > /tmp/pkm-regulation.key
-scp /tmp/pkm-regulation.key ubuntu@<VM_PUBLIC_IP>:/tmp/pkm-regulation.key
-ssh ubuntu@<VM_PUBLIC_IP> 'sudo install -d -o root -g root -m 0750 /etc/pkm/keys && sudo install -o root -g root -m 0640 /tmp/pkm-regulation.key /etc/pkm/keys/regulation.key && rm /tmp/pkm-regulation.key'
-rm /tmp/pkm-regulation.key
+Create an instance-principal dynamic group whose matching rule selects this VM
+(prefer its instance OCID rather than the whole compartment), then grant only:
+
+```text
+Allow dynamic-group <pkm-vm-group> to read buckets in compartment <compartment> where target.bucket.name='<bucket>'
+Allow dynamic-group <pkm-vm-group> to manage objects in compartment <compartment> where target.bucket.name='<bucket>'
 ```
+
+The first permission lets startup verify versioning and retention; the second
+allows per-record key create/read/delete. Do not grant bucket management, and do
+not enable object versioning later. Record the Object Storage namespace shown
+in the bucket details.
+
+## 3. First deployment
 
 From the Mac workspace:
 
 ```bash
 chmod +x deploy.sh backup.sh deploy/install-oracle-vm.sh deploy/verify-restic-restore.sh
+export OCI_RECORD_KEY_NAMESPACE='<namespace>'
+export OCI_RECORD_KEY_BUCKET='pkm-record-keys'
 ./deploy.sh <VM_PUBLIC_IP> ubuntu
 ```
 
@@ -44,7 +55,8 @@ The installer:
 - builds the PWA, then deletes `node_modules` from the release
 - binds FastAPI to `127.0.0.1:8000` and Caddy to `127.0.0.1:8080`
 - creates `/var/lib/pkm` for persistent data
-- requires a separately provisioned `/etc/pkm/keys/regulation.key`
+- authenticates to the external key bucket with the VM instance principal
+- refuses startup if the key bucket is unavailable, versioned, or retained
 - generates and prints the owner access key once
 - keeps the newest three atomic releases
 
@@ -52,7 +64,7 @@ Save the printed owner access key in a password manager. The VM stores only its
 SHA-256 hash. If it is lost, generate a new key and replace
 `PKM_API_KEY_HASH` in `/etc/pkm/pkm.env`.
 
-## 3. Configure GPT
+## 4. Configure GPT
 
 On the VM:
 
@@ -78,7 +90,7 @@ curl -fsS http://127.0.0.1:8080/health/ready
 Without an OpenAI key, the API still starts and Regulation uses its
 deterministic degradation protocol.
 
-## 4. Private HTTPS with Tailscale
+## 5. Private HTTPS with Tailscale
 
 Install Tailscale using its current official Linux instructions, then:
 
@@ -93,7 +105,7 @@ Mac while signed into your tailnet. Tailscale terminates HTTPS with an
 automatically provisioned certificate; Caddy and FastAPI remain loopback-only.
 Do not use Funnel for this private application.
 
-## 5. Encrypted off-VM recovery
+## 6. Encrypted off-VM recovery
 
 Restic encrypts the repository. Use a storage account outside this VM; a
 separate provider/account gives better recovery isolation.
@@ -116,23 +128,47 @@ AWS_ACCESS_KEY_ID=<backup-only-key>
 AWS_SECRET_ACCESS_KEY=<backup-only-secret>
 ```
 
-Initialize, back up, restore-test, then enable the timer:
+Initialize and back up. For restore verification, independently stage the exact
+release source (for example, a fresh checkout of the committed release) outside
+`/opt/pkm/current`; the verifier creates a fresh virtual environment:
 
 ```bash
 sudo bash -c 'set -a; source /etc/pkm/backup.env; set +a; restic init'
 sudo systemctl start pkm-backup.service
-sudo APP_DIR=/opt/pkm/current /opt/pkm/current/deploy/verify-restic-restore.sh
+sudo RECOVERY_SOURCE_DIR=/tmp/pkm-clean-release \
+  RECOVERY_ENV_FILE=/root/recovery/pkm.env \
+  RECOVERY_EXPECTED_MIN_SESSIONS=1 \
+  RECOVERY_EXPECTED_MIN_RULES=4 \
+  /opt/pkm/current/deploy/verify-restic-restore.sh
 sudo systemctl enable --now pkm-backup.timer
 systemctl list-timers pkm-backup.timer
 ```
 
-Keep the Restic password and Regulation recovery key as separate password-manager
-items. Restic backs up encrypted application data and non-secret configuration;
-it excludes `/etc/pkm/keys`, `/etc/pkm/backup.env`, and its password file. A
-restore therefore requires both the Restic credentials and separately held
-Regulation recovery key.
+Keep the Restic credentials and a protected recovery copy of `pkm.env` outside
+the VM. Restic backs up Regulation ciphertext but excludes `pkm.env`,
+`backup.env`, and its password file. Recovery also requires OCI
+instance-principal access to the
+record-key bucket; a retained backup cannot decrypt a record after that
+record's external key has been deleted.
 
-## 6. Launch verification
+Do not rely on the production VM's identity for recovery. Create a second,
+normally stopped recovery instance (or a temporary replacement instance) in a
+separate `pkm-recovery-group` dynamic group. Grant it `read buckets` and `read
+objects` only for the record-key bucket. The production group remains the only
+principal allowed to create or delete record-key objects. Stage the protected
+recovery env and Restic credentials independently on the recovery instance.
+
+```text
+Allow dynamic-group <pkm-recovery-group> to read buckets in compartment <compartment> where target.bucket.name='<bucket>'
+Allow dynamic-group <pkm-recovery-group> to read objects in compartment <compartment> where target.bucket.name='<bucket>'
+```
+
+Before each drill, create a disposable completed Regulation session and record
+the Privacy Center's session and rule counts. The verifier requires those
+minimum counts and decrypts the restored state; constructing the app alone is
+not considered recovery evidence.
+
+## 7. Launch verification
 
 ```bash
 sudo systemctl status pkm-api caddy --no-pager
@@ -140,7 +176,11 @@ curl -fsS http://127.0.0.1:8080/health
 curl -fsS http://127.0.0.1:8080/health/ready
 sudo journalctl -u pkm-api -n 100 --no-pager
 sudo systemctl start pkm-backup.service
-sudo /opt/pkm/current/deploy/verify-restic-restore.sh
+sudo RECOVERY_SOURCE_DIR=/tmp/pkm-clean-release \
+  RECOVERY_ENV_FILE=/root/recovery/pkm.env \
+  RECOVERY_EXPECTED_MIN_SESSIONS=1 \
+  RECOVERY_EXPECTED_MIN_RULES=4 \
+  /opt/pkm/current/deploy/verify-restic-restore.sh
 ```
 
 On the PWA:
@@ -150,14 +190,13 @@ On the PWA:
 3. Restart the API and confirm the session is still present.
 4. Confirm a private check-in disappears after restart.
 5. Export, inspect, and remove a test session from active history.
-6. Do not begin the seven-day daily-use shadow period until ADR 0093's
-   per-record cryptographic deletion is implemented and restore-tested. Current
-   encrypted backup copies expire according to the configured Restic policy.
+6. Delete a disposable session and prove a pre-deletion database backup cannot
+   decrypt it after the external record key is destroyed.
 7. Install the PWA from the browser and repeat under weak connectivity.
 
 Only begin the seven-day shadow-use period after every check passes.
 
-## 7. Operations
+## 8. Operations
 
 ```bash
 sudo systemctl restart pkm-api

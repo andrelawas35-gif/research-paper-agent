@@ -17,6 +17,7 @@ records MUST NOT enter general retrieval.
 from __future__ import annotations
 
 import json
+import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import os
@@ -29,6 +30,98 @@ from .event_envelope import Domain, EventEnvelope, EventStore, Sensitivity
 def _data_path(*parts: str) -> Path:
     """Resolve production data outside the release directory when configured."""
     return Path(os.getenv("PKM_DATA_DIR", "data")).joinpath(*parts)
+
+
+class _SQLiteEventStore:
+    """Transactional SQLite event adapter hidden behind Repository's interface."""
+
+    def __init__(self, path: Path, *, domain: Domain) -> None:
+        self._path = path
+        self._domain = domain
+
+    def _connect(self) -> sqlite3.Connection:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_path = self._path.with_suffix(".jsonl")
+        legacy_events = (
+            EventStore(legacy_path).replay()
+            if legacy_path != self._path and legacy_path.exists()
+            else []
+        )
+        connection = sqlite3.connect(self._path, timeout=10)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=FULL")
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                domain TEXT NOT NULL CHECK (domain = 'regulation'),
+                timestamp TEXT NOT NULL,
+                envelope_json TEXT NOT NULL
+            )
+            """
+        )
+        if legacy_events:
+            with connection:
+                connection.executemany(
+                    """
+                    INSERT OR IGNORE INTO events
+                        (event_id, domain, timestamp, envelope_json)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            event.event_id,
+                            event.domain.value,
+                            event.timestamp,
+                            json.dumps(
+                                event.to_dict(),
+                                ensure_ascii=False,
+                                sort_keys=True,
+                            ),
+                        )
+                        for event in legacy_events
+                    ],
+                )
+            legacy_path.replace(legacy_path.with_suffix(".jsonl.migrated"))
+        return connection
+
+    def append(self, envelope: EventEnvelope) -> None:
+        if envelope.domain != self._domain:
+            raise StoreBoundaryError(
+                f"Cannot append {envelope.domain.value} event to "
+                f"{self._domain.value} SQLite store"
+            )
+        encoded = json.dumps(
+            envelope.to_dict(), ensure_ascii=False, sort_keys=True
+        )
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO events (event_id, domain, timestamp, envelope_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    envelope.event_id,
+                    envelope.domain.value,
+                    envelope.timestamp,
+                    encoded,
+                ),
+            )
+
+    def replay(self) -> List[EventEnvelope]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT envelope_json FROM events ORDER BY sequence"
+            ).fetchall()
+        return [EventEnvelope.from_dict(json.loads(row[0])) for row in rows]
+
+    def event_ids(self) -> Set[str]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT event_id FROM events").fetchall()
+        return {str(row[0]) for row in rows}
 
 # ── Repository interface ─────────────────────────────────────────────
 
@@ -142,13 +235,15 @@ class RegulationStore(Repository):
     """
 
     domain: Domain = field(default=Domain.REGULATION, init=False)
-    _store: EventStore = field(init=False)
+    _store: _SQLiteEventStore = field(init=False)
 
     def __post_init__(self) -> None:
-        self._store = EventStore(_data_path("regulation", "events.jsonl"))
+        self._store = _SQLiteEventStore(
+            _data_path("regulation", "events.db"), domain=Domain.REGULATION
+        )
 
     def set_path(self, path: Path) -> None:
-        self._store = EventStore(path)
+        self._store = _SQLiteEventStore(path, domain=Domain.REGULATION)
 
     def append(self, envelope: EventEnvelope) -> None:
         if envelope.domain != Domain.REGULATION:

@@ -13,6 +13,7 @@ Provides REST endpoints for the guided PWA Regulation flow:
 - Offline protocol access
 """
 
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -119,18 +120,21 @@ def create_regulation_router(
 
     if persistence is not None:
         durable_sessions, durable_rules = persistence.load()
+        purge_expired = getattr(persistence, "purge_expired_sessions", None)
+        if purge_expired is not None:
+            purge_expired(durable_sessions)
         _sessions.update(durable_sessions)
         _rules.update(durable_rules)
 
     def _put_session(session: TriggerSession) -> None:
-        _sessions[session.session_id] = session
         if persistence is not None:
-            persistence.save_session(session)
+            session = persistence.save_session(session)
+        _sessions[session.session_id] = session
 
     def _put_rule(rule: PersonalRegulationRule) -> None:
-        _rules[rule.rule_id] = rule
         if persistence is not None:
             persistence.save_rule(rule)
+        _rules[rule.rule_id] = rule
 
     # Pre-populate default safety rules
     for rule_text in DEFAULT_SAFETY_RULES:
@@ -163,10 +167,38 @@ def create_regulation_router(
 
         is_private = body.get("is_private", False)
 
+        idempotency_key = request.headers.get("Idempotency-Key", "").strip()
+        if len(idempotency_key) > 128:
+            raise HTTPException(status_code=400, detail="Idempotency-Key is too long")
+        session_id = None
+        if idempotency_key:
+            digest = hashlib.sha256(
+                f"{owner_id}:create-session:{idempotency_key}".encode("utf-8")
+            ).hexdigest()
+            session_id = f"reg_{digest[:16]}"
+            existing = _sessions.get(session_id)
+            if existing is not None:
+                if (
+                    existing.trigger_event != trigger_event
+                    or existing.is_private != is_private
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Idempotency-Key was already used for another request",
+                    )
+                return {
+                    "session_id": existing.session_id,
+                    "state": existing.state.value,
+                    "trigger_event": existing.trigger_event,
+                    "is_private": existing.is_private,
+                    "created_at": existing.created_at,
+                }
+
         session = start_trigger_check_in(
             owner_id=owner_id,
             trigger_event=trigger_event,
             is_private=is_private,
+            session_id=session_id,
         )
 
         # Begin safety screen immediately
@@ -686,8 +718,37 @@ def create_regulation_router(
 
         exceptions = body.get("exceptions", [])
 
+        idempotency_key = request.headers.get("Idempotency-Key", "").strip()
+        if len(idempotency_key) > 128:
+            raise HTTPException(status_code=400, detail="Idempotency-Key is too long")
+        rule_id = str(uuid.uuid4())
+        if idempotency_key:
+            digest = hashlib.sha256(
+                f"{owner_id}:create-rule:{idempotency_key}".encode("utf-8")
+            ).hexdigest()
+            rule_id = f"rule_{digest[:16]}"
+            existing = _rules.get(rule_id)
+            if existing is not None:
+                if (
+                    existing.text != text
+                    or existing.strength != strength
+                    or existing.exceptions != exceptions
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Idempotency-Key was already used for another request",
+                    )
+                return {
+                    "rule_id": existing.rule_id,
+                    "text": existing.text,
+                    "strength": existing.strength.value,
+                    "confirmation": existing.confirmation.value,
+                    "exceptions": existing.exceptions,
+                    "created_at": existing.created_at,
+                }
+
         rule = PersonalRegulationRule(
-            rule_id=str(uuid.uuid4()),
+            rule_id=rule_id,
             text=text,
             strength=strength,
             confirmation=ConfirmationState.CONFIRMED,
@@ -882,5 +943,8 @@ def _session_summary(session: TriggerSession) -> Dict[str, Any]:
         "safety_active": session.is_safety_active(),
         "emotion_count": len(session.emotions),
         "fact_count": len(session.facts),
-        "action_count": len(session.actions),
+        "action_count": (
+            session.compact_record.action_count
+            if session.compact_record else len(session.actions)
+        ),
     }

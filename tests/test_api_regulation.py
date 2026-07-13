@@ -91,6 +91,60 @@ class TestCreateSession:
         res = client.post("/api/regulation/sessions", json={})
         assert res.status_code == 400
 
+    def test_duplicate_create_request_is_idempotent(self, client):
+        headers = {"Idempotency-Key": "offline-capture-123"}
+        body = {"trigger_event": "One observed fact"}
+
+        first = client.post("/api/regulation/sessions", headers=headers, json=body)
+        second = client.post("/api/regulation/sessions", headers=headers, json=body)
+
+        assert first.status_code == second.status_code == 200
+        assert first.json() == second.json()
+        assert client.get("/api/regulation/sessions").json()["count"] == 1
+
+    def test_reused_idempotency_key_with_different_payload_is_rejected(self, client):
+        headers = {"Idempotency-Key": "same-key"}
+        client.post(
+            "/api/regulation/sessions", headers=headers,
+            json={"trigger_event": "First payload"},
+        )
+
+        response = client.post(
+            "/api/regulation/sessions", headers=headers,
+            json={"trigger_event": "Different payload"},
+        )
+
+        assert response.status_code == 409
+
+    def test_failed_durable_write_does_not_publish_session(self, registry):
+        class FailingPersistence:
+            def load(self):
+                return {}, {}
+
+            def save_session(self, session):
+                raise RuntimeError("key provider unavailable")
+
+            def save_rule(self, rule):
+                return None
+
+        shared = {}
+        router = create_regulation_router(
+            store_registry=registry,
+            sessions_dict=shared,
+            rules_dict={},
+            persistence=FailingPersistence(),
+        )
+        from fastapi import FastAPI
+        app = FastAPI()
+        app.include_router(router)
+
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/api/regulation/sessions", json={"trigger_event": "Observed fact"}
+        )
+
+        assert response.status_code == 500
+        assert shared == {}
+
 
 class TestGetSession:
     def test_get_existing_session(self, client):
@@ -511,6 +565,34 @@ class TestRules:
         )
         assert res.status_code == 200
         assert res.json()["strength"] == "default_principle"
+
+    def test_duplicate_rule_create_is_idempotent(self, client):
+        headers = {"Idempotency-Key": "rule-create-1"}
+        body = {
+            "text": "Pause before sending another message",
+            "strength": "default_principle",
+            "exceptions": ["immediate danger"],
+        }
+        first = client.post("/api/regulation/rules", headers=headers, json=body)
+        second = client.post("/api/regulation/rules", headers=headers, json=body)
+
+        assert first.status_code == second.status_code == 200
+        assert first.json() == second.json()
+
+    def test_rule_idempotency_key_reuse_with_new_payload_conflicts(self, client):
+        headers = {"Idempotency-Key": "rule-create-conflict"}
+        client.post(
+            "/api/regulation/rules",
+            headers=headers,
+            json={"text": "First rule", "strength": "reflection_prompt"},
+        )
+        response = client.post(
+            "/api/regulation/rules",
+            headers=headers,
+            json={"text": "Different rule", "strength": "reflection_prompt"},
+        )
+
+        assert response.status_code == 409
 
     def test_create_hard_guardrail_safety_conflict(self, client):
         # Check that the endpoint exists and accepts/rejects rules correctly

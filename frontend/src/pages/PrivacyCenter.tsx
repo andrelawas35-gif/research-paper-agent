@@ -11,8 +11,14 @@ import * as api from '../api/client';
 import type { SessionSummary } from '../api/client';
 import { StatusNotice } from '../components/StatusNotice';
 import { SourceStamp } from '../components/SourceStamp';
+import {
+  deleteOfflineOrientation,
+  exportOfflineOrientation,
+  hasOfflineOrientation,
+  saveOfflineOrientation,
+} from '../offline/orientationStore';
 
-type Tab = 'sessions' | 'export' | 'audit' | 'retention';
+type Tab = 'sessions' | 'offline' | 'export' | 'audit' | 'retention';
 
 export default function PrivacyCenter() {
   const [activeTab, setActiveTab] = useState<Tab>('sessions');
@@ -41,11 +47,11 @@ export default function PrivacyCenter() {
   };
 
   const handleDelete = async (sessionId: string) => {
-    if (!confirm('Remove this session from active history? Encrypted backup copies expire under the backup retention policy.')) return;
+    if (!confirm('Cryptographically delete this session? Its key will be destroyed, making retained database and backup ciphertext unreadable.')) return;
     setLoading(true);
     try {
       await api.privacy.deleteSession(sessionId);
-      setMessage('Session removed from active history.');
+      setMessage('Session cryptographically deleted.');
       loadSessions();
     } catch (e: unknown) {
       setError((e as api.ApiError).detail || 'Failed to delete session');
@@ -55,11 +61,11 @@ export default function PrivacyCenter() {
   };
 
   const handleDeleteAll = async () => {
-    if (!confirm('Remove ALL regulation sessions from active history? Encrypted backup copies expire under the backup retention policy.')) return;
+    if (!confirm('Cryptographically delete ALL Regulation sessions? Their keys will be destroyed and this cannot be undone.')) return;
     setLoading(true);
     try {
       const result = await api.privacy.deleteAll();
-      setMessage(`${result.deleted_count} sessions removed from active history.`);
+      setMessage(`${result.deleted_count} sessions cryptographically deleted.`);
       loadSessions();
     } catch (e: unknown) {
       setError((e as api.ApiError).detail || 'Failed to delete all sessions');
@@ -92,6 +98,7 @@ export default function PrivacyCenter() {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'sessions', label: 'Sessions' },
+    { id: 'offline', label: 'Offline' },
     { id: 'export', label: 'Export' },
     { id: 'audit', label: 'Audit Log' },
     { id: 'retention', label: 'Retention' },
@@ -196,6 +203,9 @@ export default function PrivacyCenter() {
       )}
 
       {/* Export tab */}
+      {activeTab === 'offline' && <OfflineOrientationManager />}
+
+      {/* Export tab */}
       {activeTab === 'export' && (
         <div className="space-y-6">
           <div className="card">
@@ -233,6 +243,109 @@ export default function PrivacyCenter() {
       {/* Retention tab */}
       {activeTab === 'retention' && (
         <RetentionTab />
+      )}
+    </div>
+  );
+}
+
+function OfflineOrientationManager() {
+  const [values, setValues] = useState('');
+  const [rules, setRules] = useState('');
+  const [grounding, setGrounding] = useState('Wait 30 minutes before an irreversible action.');
+  const [commitments, setCommitments] = useState('');
+  const [pin, setPin] = useState('');
+  const [consent, setConsent] = useState(false);
+  const [regions, setRegions] = useState({ PH: true, US: true });
+  const [stored, setStored] = useState(hasOfflineOrientation());
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  const lines = (value: string) => value.split('\n').map((line) => line.trim()).filter(Boolean);
+
+  const save = async () => {
+    setError('');
+    setMessage('');
+    try {
+      await saveOfflineOrientation({
+        confirmedValues: lines(values),
+        personalRules: lines(rules),
+        groundingActions: lines(grounding),
+        commitments: lines(commitments),
+        safetyRegions: ([regions.PH && 'PH', regions.US && 'US'].filter(Boolean) as ('PH' | 'US')[]),
+      }, pin, consent);
+      setStored(true);
+      setMessage('Encrypted offline snapshot saved on this device.');
+    } catch (cause) {
+      setError((cause as Error).message);
+    }
+  };
+
+  const download = async () => {
+    try {
+      const content = await exportOfflineOrientation(pin);
+      const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'pkm-offline-orientation.json';
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (cause) {
+      setError((cause as Error).message);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="card space-y-3">
+        <h2 className="font-semibold">Offline Orientation Snapshot</h2>
+        <p className="text-sm text-muted">
+          Store only what you deliberately confirm. The snapshot is encrypted with a device passphrase that the server never receives and cannot recover.
+        </p>
+        <p className="text-sm text-muted">
+          This is an owner-reviewed device snapshot, not an automatically synchronized or canonical backend record. Review every line before saving.
+        </p>
+        {[
+          ['Confirmed values', values, setValues],
+          ['Personal rules', rules, setRules],
+          ['Approved grounding actions', grounding, setGrounding],
+          ['Active commitments', commitments, setCommitments],
+        ].map(([label, value, setter]) => (
+          <label key={label as string} className="block text-sm text-ink">
+            {label as string} <span className="text-muted">(one per line)</span>
+            <textarea className="textarea-field h-24 mt-1" value={value as string} onChange={(event) => (setter as (value: string) => void)(event.target.value)} />
+          </label>
+        ))}
+        <fieldset>
+          <legend className="text-sm text-ink">Cached safety regions</legend>
+          <div className="flex gap-4 mt-2 text-sm">
+            {(['PH', 'US'] as const).map((region) => (
+              <label key={region} className="flex items-center gap-2">
+                <input type="checkbox" checked={regions[region]} onChange={(event) => setRegions((current) => ({ ...current, [region]: event.target.checked }))} />
+                {region === 'PH' ? 'Philippines' : 'United States'}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <label className="block text-sm text-ink">
+          Offline passphrase (14+ characters)
+          <input className="input-field mt-1" type="password" autoComplete="new-password" value={pin} onChange={(event) => setPin(event.target.value)} />
+        </label>
+        <label className="flex items-start gap-2 text-sm text-ink">
+          <input className="mt-1" type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
+          I consent to storing this encrypted snapshot and pending offline captures on this device.
+        </label>
+        {message && <StatusNotice variant="confirmation">{message}</StatusNotice>}
+        {error && <StatusNotice variant="error">{error}</StatusNotice>}
+        <button className="btn-primary w-full" onClick={() => void save()}>Save encrypted snapshot</button>
+      </div>
+      {stored && (
+        <div className="card space-y-3">
+          <p className="text-sm text-muted">An encrypted snapshot is stored on this browser.</p>
+          <div className="flex gap-3">
+            <button className="btn-secondary flex-1" onClick={() => void download()}>Export readable copy</button>
+            <button className="btn-danger flex-1" onClick={() => { if (confirm('Delete the offline snapshot and pending captures from this device?')) { deleteOfflineOrientation(); setStored(false); } }}>Delete cache</button>
+          </div>
+        </div>
       )}
     </div>
   );

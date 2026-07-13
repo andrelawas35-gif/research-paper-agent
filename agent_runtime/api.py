@@ -18,7 +18,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +26,11 @@ from fastapi.responses import JSONResponse
 
 from .event_envelope import Domain, EventEnvelope, EventStore, Sensitivity
 from .stores import StoreRegistry
+from .auth_sessions import (
+    InvalidSessionError,
+    OwnerSessionManager,
+    RecentAuthenticationRequired,
+)
 
 # ── Configuration ────────────────────────────────────────────────────
 
@@ -65,12 +70,25 @@ def verify_api_key(provided_key: str, expected_hash: str) -> bool:
     return hmac.compare_digest(provided_hash, expected_hash)
 
 
-def require_auth(config: ApiConfig):
-    """Dependency: require valid API key in X-API-Key header."""
+def _bearer_token(request: Request) -> str:
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    return token if scheme.lower() == "bearer" else ""
+
+
+def require_auth(
+    sessions: OwnerSessionManager, *, recent: bool = False
+):
+    """Dependency: require a valid revocable server-side owner session."""
 
     async def _auth(request: Request) -> None:
-        api_key = request.headers.get("X-API-Key", "")
-        if not verify_api_key(api_key, config.owner_api_key_hash):
+        try:
+            sessions.validate(_bearer_token(request), require_recent=recent)
+        except RecentAuthenticationRequired as exc:
+            raise HTTPException(
+                status_code=403, detail="Recent owner authentication required"
+            ) from exc
+        except InvalidSessionError:
             raise AuthenticationError()
 
     return _auth
@@ -184,6 +202,8 @@ def create_app(
     owner_id: str = "default",
     model_provider: Any = None,
     regulation_persistence: Any = None,
+    auth_sessions: OwnerSessionManager | None = None,
+    readiness_checks: Dict[str, Callable[[], None]] | None = None,
 ) -> FastAPI:
     """Create the FastAPI application.
 
@@ -201,6 +221,8 @@ def create_app(
     _registry = store_registry or StoreRegistry()
     _audit = audit or AuditLogger()
     _owner_id = owner_id
+    _auth_sessions = auth_sessions or OwnerSessionManager()
+    _external_readiness_checks = readiness_checks or {}
 
     app = FastAPI(
         title="Personal Knowledge Manager",
@@ -215,7 +237,13 @@ def create_app(
         allow_origins=_config.cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["X-API-Key", "X-Request-ID", "Content-Type"],
+        allow_headers=[
+            "Authorization",
+            "Idempotency-Key",
+            "X-API-Key",
+            "X-Request-ID",
+            "Content-Type",
+        ],
     )
 
     # ── Health endpoints (no auth required) ──────────────────────────
@@ -255,6 +283,13 @@ def create_app(
         except Exception:
             checks["regulation_store"] = "error"
 
+        for name, check in _external_readiness_checks.items():
+            try:
+                check()
+                checks[name] = "ok"
+            except Exception:
+                checks[name] = "error"
+
         all_ok = all(v == "ok" for v in checks.values())
         payload = {
             "status": "ready" if all_ok else "degraded",
@@ -266,7 +301,26 @@ def create_app(
 
     # ── Protected endpoints (auth required) ──────────────────────────
 
-    _auth = require_auth(_config)
+    _auth = require_auth(_auth_sessions)
+    _recent_auth = require_auth(_auth_sessions, recent=True)
+
+    @app.post("/api/auth/session", status_code=201)
+    async def create_owner_session(request: Request) -> Dict[str, Any]:
+        api_key = request.headers.get("X-API-Key", "")
+        if not verify_api_key(api_key, _config.owner_api_key_hash):
+            raise AuthenticationError()
+        issued = _auth_sessions.issue()
+        return {
+            "token": issued.token,
+            "expires_at": issued.expires_at,
+            "recent_auth_until": issued.recent_auth_until,
+        }
+
+    @app.post("/api/auth/revoke", status_code=204)
+    async def revoke_owner_session(request: Request) -> Response:
+        await _auth(request)
+        _auth_sessions.revoke(_bearer_token(request))
+        return Response(status_code=204)
 
     @app.get("/api/me")
     async def me(request: Request) -> Dict[str, Any]:
@@ -334,6 +388,7 @@ def create_app(
         rules_dict=_shared_rules,
         persistence=regulation_persistence,
         auth_dependency=_auth,
+        recent_auth_dependency=_recent_auth,
     )
     app.include_router(_privacy_router)
 

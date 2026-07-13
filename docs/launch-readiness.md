@@ -1,52 +1,87 @@
 # PKM PWA Launch Readiness
 
-Status: **hardened production candidate; not approved for daily-use launch**.
+Status: **implementation-reviewed production candidate; not yet approved for daily use**.
 
-The current release can be installed on one Oracle VM, built with Node 24 LTS
-(enforcing Node 20.19+), reached privately through Tailscale, restarted without
-losing durable Regulation sessions, and recovered from an encrypted Restic
-backup using a separately held Regulation key. It does not claim high
-availability.
+The remaining blockers require operator evidence and real elapsed use:
+authorize this Oracle VM's instance principal to the dedicated non-versioned
+record-key bucket, configure Tailscale and encrypted off-VM Restic recovery,
+deploy the committed release, run the clean restore drill, and then complete
+seven real days of shadow use. The release makes no high-availability or
+emergency-service claim.
 
-## Verified in this slice
+## Closed implementation gates
 
-- Owner API authentication gates online Regulation and Privacy routes.
-- Browser credentials are tab-scoped and the workspace has an explicit lock.
-- Unauthenticated offline access is limited to the bundled Regulation protocol.
-- Model unavailability degrades to deterministic guidance.
-- Private drafts are memory-only and discard removes them from memory.
-- Durable Regulation events are encrypted at rest and replay after restart.
-- Caddy and FastAPI bind to loopback; Tailscale provides private HTTPS.
-- Restic excludes live secrets and requires separately held recovery material.
-- Backend tests, frontend tests, lint, production build, PWA generation, shell
-  syntax, dependency audit, and a fresh-browser unlock failure are verified.
+1. Regulation persistence uses a domain-checked SQLite WAL adapter with
+   `synchronous=FULL`, restart replay, one-time JSONL migration, and transactional
+   interrupted-write behavior.
+2. Completed sessions durably retain only the compact Regulation Record. Safety
+   branch entry and expiry also minimize the server-side projection immediately. Raw
+   trigger, fact, interpretation, urge, action, and outcome narrative loses its
+   session key at completion.
+3. Active sessions, compact records, and personal rules use independent AES-GCM
+   data-encryption keys. Tests prove key destruction makes a copied pre-deletion
+   database unreadable. Off-database destruction markers distinguish intentional
+   erasure from accidental key loss, which fails startup closed.
+4. Production fails closed onto an OCI Object Storage record-key provider using
+   the VM instance principal. Startup rejects versioning, retention rules,
+   missing configuration, missing SDK support, or unavailable keys. The old VM
+   master key is legacy migration input only.
+5. The owner key is exchanged once for a server-side session. The browser stores
+   only a tab-scoped token; idle, absolute, recent-auth, explicit lock, and
+   revocation behavior are tested. Export, deletion, and consent changes require
+   recent authentication.
+6. The offline Orientation Snapshot is explicit-consent only and passphrase-encrypted
+   with PBKDF2-SHA-256 plus AES-GCM. Confirmed values, rules, grounding actions,
+   commitments, Manila/Seattle safety resources, inspection, readable export,
+   deletion, and encrypted deferred capture are available offline. It is clearly
+   labeled as an owner-reviewed device snapshot, not canonical backend state.
+7. ADR 0139 narrows this release to the private Regulation PWA. Discord,
+   reminders, and the background dispatcher remain disabled until their own
+   channel-linking, delivery, and consent acceptance suites pass.
+8. Regulation session and rule creation use retry-stable client idempotency keys,
+   deterministic duplicate handling, and conflict rejection. SQLite tests
+   prove duplicate-event rejection and uncommitted-write rollback. Restore
+   verification refuses live-release code, creates a clean virtual environment
+   from independently staged source, and decrypts a known minimum canary state.
+9. Retention expiry destroys the independent session/record key and removes the
+   in-memory projection. Production rejects legacy master-key events until an
+   explicit rekey migration has been completed.
 
-## Daily-use launch gates
+## Browser and behavioral evidence collected
 
-Complete these in order; each item must add an automated test and operator
-evidence before it can be marked done.
+- A complete ordinary phone-width Regulation walkthrough separated facts from
+  interpretations, captured emotion and urge, selected a reversible delayed
+  action, and reached optional outcome review.
+- A self-harm walkthrough suspended coaching, prevented duplicate safety
+  submission, and displayed international, U.S. 988, and Philippines 1553
+  resources.
+- Model failure, malformed output, spend limits, and deterministic fallback are
+  covered by the Regulation qualification and provider test suites.
+- At 390×844 and 1440×900 there was no horizontal overflow; desktop content
+  remained bounded to 512 px. Interactive home targets are at least 44 px.
+- Skip navigation moves focus to `main-content`; global focus-visible and
+  `prefers-reduced-motion` policies are present.
+- The generated PWA precaches the application shell and offline protocol.
 
-1. Replace production JSONL Regulation persistence with the ADR-selected SQLite
-   WAL repository and enforce domain boundaries in repository adapters.
-2. Store only the approved compact Regulation Record durably; purge raw trigger,
-   facts, interpretation, emotion, and urge narrative after closure.
-3. Encrypt each durable record with its own data-encryption key and prove that
-   deleting the key makes live data and retained backup snapshots unreadable.
-4. Replace the VM-resident live key file with the selected protected external
-   key-provider flow, including startup failure and recovery tests.
-5. Add expiring server-side owner sessions with recent-auth requirements for
-   export, deletion, and key rotation.
-6. Build a consented offline Orientation Snapshot containing confirmed values,
-   personal rules, approved grounding actions, commitments, and regional safety
-   resources. Add offline inspect/export/delete and deferred-capture behavior.
-7. Install separate systemd units for web/API, background dispatcher, and the
-   approved Discord rapid-entry path, or explicitly amend the ADR scope.
-8. Prove duplicate-request handling, interrupted-write recovery, and a true
-   clean-environment restore rather than replay through the live release.
-9. Complete keyboard, focus, reduced-motion, responsive, weak-network, and three
-   scripted Regulation walkthroughs on phone and desktop.
-10. Rotate the previously exposed provider credential, then complete the
-    seven-day shadow-use period without treating the app as an emergency service.
+## Remaining operator gates
 
-Do not relabel this candidate as daily-use ready until all ten gates are closed
-or the governing ADRs are explicitly superseded.
+- [ ] Create and authorize the OCI record-key bucket exactly as documented in
+  `ORACLE_VM_SETUP.md`; prove production startup and external-key deletion on the
+  real VM.
+- [ ] Install Tailscale, keep public ingress limited to SSH, and verify private
+  HTTPS from both Manila and Seattle-relevant devices/networks.
+- [ ] Configure the off-VM Restic repository, run a backup, and pass the clean
+  restore drill from independently staged source on a separately authorized
+  recovery instance.
+- [ ] Install the PWA on a phone and repeat the ordinary, safety, provider-down,
+  service-restart, and weak-connectivity walkthroughs. In-app browser automation
+  cannot exercise service-worker networking, so this remains a physical-device
+  check.
+- [ ] Supply the newly rotated OpenAI credential directly on the VM. Do not put
+  it in chat, Git, deployment arguments, or shell history.
+- [ ] Complete `docs/shadow-use-log.md`: seven elapsed days, at least five
+  naturally occurring check-ins, and every ADR 0136 threshold. A severe safety
+  or privacy failure resets the period after correction.
+
+Do not relabel this release as daily-use ready until every remaining checkbox is
+closed with dated evidence.

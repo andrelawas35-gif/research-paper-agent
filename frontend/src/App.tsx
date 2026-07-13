@@ -12,7 +12,7 @@ function App() {
   const location = useLocation();
   const [offline, setOffline] = useState(!navigator.onLine);
   const [degraded, setDegraded] = useState(false);
-  const [authState, setAuthState] = useState<'checking' | 'locked' | 'unlocked'>(
+  const [authState, setAuthState] = useState<'checking' | 'locked' | 'unlocked' | 'local'>(
     api.isAuthenticated() ? 'checking' : 'locked',
   );
 
@@ -20,9 +20,14 @@ function App() {
     if (authState !== 'checking') return;
     void api.me()
       .then(() => setAuthState('unlocked'))
-      .catch(() => {
-        api.clearApiKey();
-        setAuthState('locked');
+      .catch((cause: unknown) => {
+        if ((cause as api.ApiError)?.status === 401) {
+          api.clearSession();
+          setAuthState('locked');
+        } else {
+          setDegraded(true);
+          setAuthState('local');
+        }
       });
   }, [authState]);
 
@@ -47,7 +52,9 @@ function App() {
   }, []);
 
   const isRegulation = location.pathname.startsWith('/regulation');
-  const mayUsePublicOfflineProtocol = offline && isRegulation;
+  const mayUsePublicOfflineProtocol = isRegulation && (
+    offline || degraded || authState === 'local' || authState === 'locked'
+  );
 
   if (authState === 'checking' && !mayUsePublicOfflineProtocol) {
     return <div className="min-h-screen bg-paper" aria-label="Checking access" />;
@@ -59,6 +66,7 @@ function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-paper safe-top">
+      <a href="#main-content" className="skip-link">Skip to main content</a>
       {offline && (
         <StatusNotice variant="caution">
           You are offline. The deterministic Regulation protocol and safety resources remain available.
@@ -74,10 +82,10 @@ function App() {
         <FocusedFlowNav onBack={() => window.history.back()} title="Regulation" />
       )}
 
-      <main className="flex-1">
+      <main id="main-content" className="flex-1" tabIndex={-1}>
         <Routes>
           <Route path="/" element={<NowScreen />} />
-          <Route path="/regulation" element={<RegulationFlow />} />
+          <Route path="/regulation" element={<RegulationFlow forceOffline={mayUsePublicOfflineProtocol} />} />
           <Route path="/privacy" element={<PrivacyCenter />} />
         </Routes>
       </main>

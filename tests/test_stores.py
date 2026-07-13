@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ def _isolate_paths() -> None:
 from agent_runtime.event_envelope import (
     Domain,
     EventEnvelope,
+    EventStore,
     Sensitivity,
 )
 from agent_runtime.stores import (
@@ -111,6 +113,88 @@ class TestGeneralPKMStore:
 
 
 class TestRegulationStore:
+    def test_uses_sqlite_wal_and_replays_after_restart(self, tmp_path: Path) -> None:
+        database_path = tmp_path / "regulation.db"
+        first = RegulationStore()
+        first.set_path(database_path)
+        event = _make_envelope(
+            Domain.REGULATION,
+            sensitivity=Sensitivity.RESTRICTED,
+        )
+
+        first.append(event)
+
+        reopened = RegulationStore()
+        reopened.set_path(database_path)
+        assert reopened.replay() == [event]
+        assert database_path.read_bytes().startswith(b"SQLite format 3\x00")
+        with sqlite3.connect(database_path) as connection:
+            assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+    def test_imports_legacy_jsonl_once_without_losing_events(
+        self, tmp_path: Path
+    ) -> None:
+        database_path = tmp_path / "events.db"
+        legacy_path = tmp_path / "events.jsonl"
+        event = _make_envelope(
+            Domain.REGULATION,
+            sensitivity=Sensitivity.RESTRICTED,
+        )
+        EventStore(legacy_path).append(event)
+
+        migrated = RegulationStore()
+        migrated.set_path(database_path)
+
+        assert migrated.replay() == [event]
+        assert database_path.exists()
+        assert not legacy_path.exists()
+        assert (tmp_path / "events.jsonl.migrated").exists()
+
+    def test_uncommitted_interrupted_write_is_not_replayed(self, tmp_path: Path) -> None:
+        database_path = tmp_path / "events.db"
+        store = RegulationStore()
+        store.set_path(database_path)
+        durable = _make_envelope(
+            Domain.REGULATION, sensitivity=Sensitivity.RESTRICTED
+        )
+        interrupted = _make_envelope(
+            Domain.REGULATION, sensitivity=Sensitivity.RESTRICTED
+        )
+        store.append(durable)
+
+        connection = sqlite3.connect(database_path)
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "INSERT INTO events (event_id, domain, timestamp, envelope_json) VALUES (?, ?, ?, ?)",
+            (
+                interrupted.event_id,
+                interrupted.domain.value,
+                interrupted.timestamp,
+                __import__("json").dumps(interrupted.to_dict()),
+            ),
+        )
+        connection.close()  # process interruption before COMMIT
+
+        restarted = RegulationStore()
+        restarted.set_path(database_path)
+        assert restarted.replay() == [durable]
+
+    def test_duplicate_event_write_fails_without_corrupting_original(
+        self, tmp_path: Path
+    ) -> None:
+        database_path = tmp_path / "events.db"
+        store = RegulationStore()
+        store.set_path(database_path)
+        event = _make_envelope(
+            Domain.REGULATION, sensitivity=Sensitivity.RESTRICTED
+        )
+        store.append(event)
+
+        with pytest.raises(sqlite3.IntegrityError):
+            store.append(event)
+
+        assert store.replay() == [event]
+
     def test_accepts_regulation_events(self) -> None:
         store = _temp_store(RegulationStore)
         env = _make_envelope(Domain.REGULATION, sensitivity=Sensitivity.RESTRICTED)

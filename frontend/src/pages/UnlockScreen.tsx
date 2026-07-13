@@ -3,6 +3,7 @@ import * as api from '../api/client';
 import { Button } from '../components/Button';
 import { Field } from '../components/Field';
 import { Surface } from '../components/Surface';
+import { Link } from 'react-router-dom';
 
 interface UnlockScreenProps {
   onUnlock: () => void;
@@ -20,7 +21,6 @@ export function UnlockScreen({ onUnlock }: UnlockScreenProps) {
     setError('');
     try {
       await api.authenticate(key.trim());
-      api.setApiKey(key.trim());
       onUnlock();
     } catch (cause) {
       setError((cause as api.ApiError).detail || 'Unable to unlock your PKM.');
@@ -56,7 +56,10 @@ export function UnlockScreen({ onUnlock }: UnlockScreenProps) {
             </Button>
           </form>
         </Surface>
-        <p className="text-center text-xs text-muted">The key is kept only for this browser tab and is sent only to your PKM.</p>
+        <p className="text-center text-xs text-muted">The key is exchanged once for a short-lived session and is never stored by this browser.</p>
+        <Link className="min-h-11 flex items-center justify-center text-sm text-action" to="/regulation">
+          Open offline Regulation and safety support
+        </Link>
       </div>
     </main>
   );

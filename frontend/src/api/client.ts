@@ -129,40 +129,58 @@ export interface PrivacyExportResult {
   rules: Record<string, unknown>[];
 }
 
-function getApiKey(): string {
-  return sessionStorage.getItem('pkm_api_key') || '';
+const SESSION_TOKEN_KEY = 'pkm_session_token';
+const IDEMPOTENCY_PREFIX = 'pkm_pending_mutation_';
+
+function getSessionToken(): string {
+  return sessionStorage.getItem(SESSION_TOKEN_KEY) || '';
 }
 
-export function setApiKey(key: string): void {
-  clearApiKey();
-  sessionStorage.setItem('pkm_api_key', key);
-}
-
-export function clearApiKey(): void {
+export function clearSession(): void {
+  // Remove the legacy key too so an upgraded client cannot retain an owner
+  // credential from an earlier build.
   localStorage.removeItem('pkm_api_key');
   sessionStorage.removeItem('pkm_api_key');
+  sessionStorage.removeItem(SESSION_TOKEN_KEY);
 }
 
 export async function authenticate(key: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/me`, {
+  clearSession();
+  const response = await fetch(`${API_BASE}/auth/session`, {
+    method: 'POST',
     headers: { 'X-API-Key': key },
   });
   const body = await response.json().catch(() => null) as {
-    authenticated?: boolean;
+    token?: string;
   } | null;
-  if (!response.ok || body?.authenticated !== true) {
+  if (!response.ok || !body?.token) {
     throw {
       status: response.status,
       detail: response.status === 401 ? 'That access key was not accepted.' : 'Unable to verify access.',
       correlationId: response.headers.get('x-request-id') || undefined,
     } satisfies ApiError;
   }
+  sessionStorage.setItem(SESSION_TOKEN_KEY, body.token);
 }
 
 export const me = () => request<{ owner_id: string; authenticated: boolean }>('GET', '/me');
 
 export function isAuthenticated(): boolean {
-  return !!getApiKey();
+  return !!getSessionToken();
+}
+
+export async function lock(): Promise<void> {
+  const token = getSessionToken();
+  try {
+    if (token) {
+      await fetch(`${API_BASE}/auth/revoke`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    }
+  } finally {
+    clearSession();
+  }
 }
 
 async function request<T>(
@@ -173,10 +191,24 @@ async function request<T>(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
+  const supportsDurableIdempotency = method === 'POST' && (
+    path === '/regulation/sessions' || path === '/regulation/rules'
+  );
+  let pendingKeyName = '';
+  if (supportsDurableIdempotency) {
+    const fingerprint = new TextEncoder().encode(`${method}:${path}:${JSON.stringify(body ?? null)}`);
+    const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', fingerprint)))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+    pendingKeyName = `${IDEMPOTENCY_PREFIX}${digest}`;
+    const idempotencyKey = sessionStorage.getItem(pendingKeyName) || crypto.randomUUID();
+    sessionStorage.setItem(pendingKeyName, idempotencyKey);
+    headers['Idempotency-Key'] = idempotencyKey;
+  }
 
-  const apiKey = getApiKey();
-  if (apiKey) {
-    headers['X-API-Key'] = apiKey;
+  const sessionToken = getSessionToken();
+  if (sessionToken) {
+    headers.Authorization = `Bearer ${sessionToken}`;
   }
 
   const res = await fetch(`${API_BASE}${path}`, {
@@ -191,9 +223,13 @@ async function request<T>(
       detail: (await res.json().catch(() => ({}))).detail || res.statusText,
       correlationId: res.headers.get('x-request-id') || undefined,
     };
+    if (res.status === 401) clearSession();
+    if (pendingKeyName && res.status < 500) sessionStorage.removeItem(pendingKeyName);
     throw error;
   }
 
+  if (pendingKeyName) sessionStorage.removeItem(pendingKeyName);
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 

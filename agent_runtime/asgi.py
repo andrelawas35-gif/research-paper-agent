@@ -13,21 +13,37 @@ from .api import ApiConfig, create_app
 from .encryption import KeyManager
 from .model_provider import OpenAIProvider
 from .regulation_persistence import EncryptedRegulationPersistence
+from .record_keys import (
+    RecordKeyProvider,
+    create_record_key_provider_from_env,
+)
 from .stores import StoreRegistry
 
 
-def create_production_app():
+def create_production_app(
+    *, record_key_provider: RecordKeyProvider | None = None
+):
     config = ApiConfig()
     if not config.is_configured:
         raise RuntimeError("PKM_API_KEY_HASH is required in production")
 
-    keys = KeyManager()
-    keys.initialize()
+    keys = None
+    if any(
+        os.getenv(name)
+        for name in ("REGULATION_KEY_PATH", "REGULATION_KEY", "REGULATION_KEY_DIR")
+    ):
+        keys = KeyManager()
+        keys.initialize()
     registry = StoreRegistry()
+    protected_record_keys = (
+        record_key_provider or create_record_key_provider_from_env()
+    )
     persistence = EncryptedRegulationPersistence(
         registry.regulation,
         keys,
         owner_id=os.getenv("PKM_OWNER_ID", "owner"),
+        record_keys=protected_record_keys,
+        allow_legacy=False,
     )
     provider = OpenAIProvider()
 
@@ -37,4 +53,7 @@ def create_production_app():
         owner_id=os.getenv("PKM_OWNER_ID", "owner"),
         model_provider=provider,
         regulation_persistence=persistence,
+        readiness_checks={
+            "record_key_provider": protected_record_keys.validate_configuration,
+        },
     )

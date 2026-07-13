@@ -53,14 +53,14 @@ interface FocusedFlowNavProps {
 export function FocusedFlowNav({ onBack, onSafety, title }: FocusedFlowNavProps) {
   return (
     <nav className="safe-top flex items-center justify-between px-4 py-3 bg-surface border-b border-border" aria-label="Focused navigation">
-      <button onClick={onBack} className="text-action font-semibold text-sm hover:underline focus-visible:ring-3 focus-visible:ring-action rounded-control px-2 py-1">
+      <button onClick={onBack} className="min-h-11 text-action font-semibold text-sm hover:underline focus-visible:ring-3 focus-visible:ring-action rounded-control px-2 py-1">
         ← Back
       </button>
       {title && <span className="text-sm font-semibold text-ink truncate mx-2">{title}</span>}
       {onSafety && (
         <button
           onClick={onSafety}
-          className="text-xs text-muted hover:text-danger transition-colors duration-inline focus-visible:ring-3 focus-visible:ring-danger rounded-control px-2 py-1"
+          className="min-h-11 text-xs text-muted hover:text-danger transition-colors duration-inline focus-visible:ring-3 focus-visible:ring-danger rounded-control px-2 py-1"
         >
           Need immediate help?
         </button>

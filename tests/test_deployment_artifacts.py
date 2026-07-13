@@ -34,13 +34,22 @@ def test_backup_is_encrypted_and_has_restore_verification() -> None:
     assert "RESTIC_PASSWORD_FILE" in backup
     assert "--exclude /etc/pkm/keys" in backup
     assert "--exclude /etc/pkm/backup.env" in backup
+    assert "--exclude /etc/pkm/pkm.env" in backup
     assert "restic check" in backup
+    assert "systemctl stop pkm-api.service" in backup
+    assert "trap restart_api EXIT" in backup
     assert "restic restore latest" in restore
-    assert "create_production_app" in restore
-    assert "RECOVERY_KEY_PATH" in restore
+    assert "EncryptedRegulationPersistence" in restore
+    assert "RECOVERY_SOURCE_DIR" in restore
+    assert "RECOVERY_ENV_FILE" in restore
+    assert "RECOVERY_EXPECTED_MIN_SESSIONS" in restore
+    assert "persistence.load()" in restore
+    assert "/opt/pkm/current" not in restore
 
 
-def test_installer_requires_separately_provisioned_regulation_key() -> None:
+def test_installer_requires_off_vm_record_key_provider() -> None:
     installer = (ROOT / "deploy/install-oracle-vm.sh").read_text()
-    assert "Missing /etc/pkm/keys/regulation.key" in installer
+    assert "REGULATION_RECORD_KEY_PROVIDER=oci" in installer
+    assert "OCI_RECORD_KEY_NAMESPACE" in installer
+    assert "OCI_RECORD_KEY_BUCKET" in installer
     assert "openssl rand -hex 32 > /etc/pkm/keys/regulation.key" not in installer
