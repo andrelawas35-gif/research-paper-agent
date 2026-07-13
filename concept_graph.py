@@ -223,6 +223,12 @@ def link(
     if similarity_score is None:
         similarity_score = _similarity(interest, concept)
 
+    # Skip zero-weight edges — no signal means no meaningful edge.
+    # Also prevents note ingestion from creating dead-weight edges to
+    # every interest area when concepts have zero similarity.
+    if similarity_score <= 0.0:
+        return {"status": "skipped", "reason": f"similarity too low ({similarity_score})", "interest": interest_key, "concept": concept_key}
+
     if edge is None:
         edge = {
             "interest": interest_key,
@@ -801,6 +807,173 @@ def rename_source_paper(old_name: str, new_name: str) -> dict[str, Any]:
         "new_name": new_name,
         "edge_updates": edge_updates,
         "dependency_updates": dep_updates,
+    }
+
+
+# ── Graph hygiene ────────────────────────────────────────────────────
+
+
+def prune_zero_weight_edges() -> dict[str, Any]:
+    """Remove all edges with weight ≤ 0.0.
+
+    Zero-weight edges are noise — they're created when note ingestion
+    links every concept to every interest area regardless of similarity.
+    This function removes them in-place and returns counts.
+    """
+    graph = load()
+    edges = graph.get("edges", {})
+    removed = 0
+
+    for interest_key in list(edges):
+        concept_edges = edges.get(interest_key, {})
+        for concept_key in list(concept_edges):
+            edge = concept_edges[concept_key]
+            if edge.get("weight", 0) <= 0.0:
+                del concept_edges[concept_key]
+                removed += 1
+        if not concept_edges:
+            del edges[interest_key]
+
+    if removed:
+        _save(graph)
+
+    return {"status": "ok", "removed_zero_weight_edges": removed}
+
+
+# Canonical concept name map for normalizing near-duplicates.
+# Keys are the canonical form; values are lists of variants to merge into it.
+_CANONICAL_CONCEPTS: dict[str, list[str]] = {
+    "agents": ["agent", "agentic", "agent-based"],
+    "fpga": ["fpgas"],
+    "inner and outer environment": ["inner outer environment", "outer environment simon", "environment simon says", "concept inner outer"],
+    "interests": ["intel", "interactions"],
+    "satisficing": ["satisficing vs optimizing"],
+    "optimizing": ["optimizing traditional economics", "classic view optimizing", "view optimizing traditional"],
+    "rationality": ["substantive rationality", "procedural rationality"],
+    "reading queue": ["reading queue full", "queue full schedule"],
+    "taste mode": ["taste mode complete"],
+    "modeling": ["model", "models", "modern"],
+    "systems": ["system"],
+    "resettable": ["reset"],
+    "simon": ["simon says every"],
+    "supply chain governance": ["3pl governance", "luxury supply chain"],
+    "bounded rationality": ["behavior"],
+    "design science": ["design as science of the ought"],
+    "ai-fpga agent": ["functional synthesis"],
+    "compliance monitoring": ["shipment compliance audit"],
+    "interval": ["interrupt"],
+    "science": ["some", "something"],
+}
+
+
+def normalize_concepts(
+    canon_map: dict[str, list[str]] | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Merge near-duplicate concept names across all interests.
+
+    Rewrites the graph so that all variants of a concept are folded into
+    a single canonical name.  Weights, source_papers, and types are merged
+    using the same rules as ``merge_similar_concepts``.
+
+    Parameters
+    ----------
+    canon_map:
+        Dict mapping canonical_name → [variant_names].  If None, uses
+        the built-in ``_CANONICAL_CONCEPTS`` map.
+    dry_run:
+        If True, returns the merge plan without modifying the graph.
+
+    Returns
+    -------
+    Dict with ``merged`` count and ``merges`` detail list.
+    """
+    if canon_map is None:
+        canon_map = _CANONICAL_CONCEPTS
+
+    # Build a reverse lookup: variant → canonical.
+    variant_to_canon: dict[str, str] = {}
+    for canon, variants in canon_map.items():
+        for v in variants:
+            variant_to_canon[v.strip().lower()] = canon.strip().lower()
+
+    graph = load()
+    edges = graph.get("edges", {})
+    merges: list[dict[str, Any]] = []
+
+    for interest_key in list(edges):
+        concept_edges = edges.get(interest_key, {})
+        # Group concepts by their canonical form.
+        to_merge: dict[str, list[str]] = {}  # canonical → [concept_keys]
+
+        for concept_key in list(concept_edges):
+            ck_lower = concept_key.strip().lower()
+            # Check if this concept is a canonical key or a variant.
+            canon = variant_to_canon.get(ck_lower, ck_lower)
+            # Also check if it IS a canonical key itself.
+            for c, variants in canon_map.items():
+                if ck_lower == c.strip().lower() or ck_lower in [v.strip().lower() for v in variants]:
+                    canon = c.strip().lower()
+                    break
+            to_merge.setdefault(canon, []).append(concept_key)
+
+        for canon, keys in to_merge.items():
+            if len(keys) < 2:
+                continue
+
+            # Survivor = the key with the most source_papers.
+            keys.sort(key=lambda k: len(concept_edges[k].get("source_papers", [])), reverse=True)
+            survivor_key = keys[0]
+
+            for absorbed_key in keys[1:]:
+                if absorbed_key not in concept_edges:
+                    continue
+                survivor = concept_edges.get(survivor_key, {})
+                absorbed = concept_edges[absorbed_key]
+
+                merges.append({
+                    "interest": interest_key,
+                    "survivor": survivor_key,
+                    "absorbed": absorbed_key,
+                    "canonical": canon,
+                })
+
+                if dry_run:
+                    continue
+
+                # Merge weights.
+                survivor["weight"] = round(
+                    survivor.get("weight", 0) + absorbed.get("weight", 0), 4
+                )
+                # Union source_papers.
+                for sp in absorbed.get("source_papers", []):
+                    if sp not in survivor.setdefault("source_papers", []):
+                        survivor["source_papers"].append(sp)
+                # Keep highest edge type.
+                abs_type = absorbed.get("type", "ingest")
+                sur_type = survivor.get("type", "ingest")
+                if _TYPE_RANK.get(abs_type, 0) > _TYPE_RANK.get(sur_type, 0):
+                    survivor["type"] = abs_type
+                # Keep latest engagement timestamp.
+                abs_last = absorbed.get("last_engaged_at")
+                sur_last = survivor.get("last_engaged_at")
+                if abs_last and (not sur_last or abs_last > sur_last):
+                    survivor["last_engaged_at"] = abs_last
+
+                del concept_edges[absorbed_key]
+
+        # Clean up empty interest keys.
+        if not edges.get(interest_key):
+            del edges[interest_key]
+
+    if merges and not dry_run:
+        _save(graph)
+
+    return {
+        "status": "ok",
+        "dry_run": dry_run,
+        "merged": len(merges),
+        "merges": merges,
     }
 
 
