@@ -1,19 +1,32 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
 import re
 from collections import Counter
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any, TypedDict
 
 from google.adk.agents.llm_agent import Agent
+from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 from google.adk.labs.openai import OpenAILlm
 from openai import AsyncOpenAI
 from openai import OpenAI
+from pydantic import BaseModel
+from typing_extensions import override
+
+# Both the ADK CLI and the Discord launcher import this module.  Loading the
+# project-local configuration here makes the OpenAI setup independent of the
+# directory from which ``adk run`` was invoked, while preserving explicitly
+# exported environment variables.
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
 from . import concept_graph, personal_notes, relationship_management
 from .agent_runtime import dynamic_context as _dynamic_ctx
@@ -234,6 +247,108 @@ class DeepSeekLlm(OpenAILlm):
     @property
     def _openai_client(self) -> AsyncOpenAI:
         return AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+
+
+class OpenAIGPT5Llm(OpenAILlm):
+    """ADK model wrapper for OpenAI GPT-5-mini.
+
+    Used when the tool count exceeds DeepSeek's function-declaration limit (~30).
+    OpenAI supports up to 128 tools per request.
+
+    GPT-5-mini (and newer OpenAI reasoning models) require ``max_completion_tokens``
+    instead of the legacy ``max_tokens`` parameter.
+    """
+
+    model: str = os.getenv("OPENAI_GPT5_MINI_MODEL", "gpt-5-mini")
+    max_tokens: int = 4096
+
+    @override
+    async def generate_content_async(
+        self, llm_request: LlmRequest, stream: bool = False
+    ) -> AsyncGenerator[LlmResponse, None]:
+        """Override to replace ``max_tokens`` with ``max_completion_tokens`` for GPT-5."""
+        # Build kwargs the same way the parent does, then swap the key.
+        messages: list[dict[str, Any]] = []
+        if llm_request.config and llm_request.config.system_instruction:
+            messages.append({
+                "role": "system",
+                "content": llm_request.config.system_instruction,
+            })
+        for content in llm_request.contents or []:
+            from google.adk.labs.openai._openai_llm import _content_to_openai_messages
+            messages.extend(_content_to_openai_messages(content))
+
+        tools: list[dict[str, Any]] = []
+        if (
+            llm_request.config
+            and llm_request.config.tools
+            and llm_request.config.tools[0].function_declarations
+        ):
+            from google.adk.labs.openai._openai_llm import _function_declaration_to_openai_tool
+            tools = [
+                _function_declaration_to_openai_tool(tool)
+                for tool in llm_request.config.tools[0].function_declarations
+            ]
+
+        tool_choice: str | None = "auto" if tools else None
+        response_format: dict[str, Any] | None = None
+
+        if llm_request.config and llm_request.config.response_schema:
+            schema = llm_request.config.response_schema
+            schema_name = "response"
+            schema_dict: dict[str, Any] = {}
+            if isinstance(schema, type) and issubclass(schema, BaseModel):
+                schema_dict = schema.model_json_schema()
+                schema_name = schema.__name__
+            elif isinstance(schema, BaseModel):
+                schema_dict = schema.__class__.model_json_schema()
+                schema_name = schema.__class__.__name__
+            elif isinstance(schema, dict):
+                schema_dict = copy.deepcopy(schema)
+                if "title" in schema_dict:
+                    schema_name = str(schema_dict["title"])
+            if schema_dict:
+                from google.adk.labs.openai._openai_llm import _enforce_strict_openai_schema
+                _enforce_strict_openai_schema(schema_dict)
+                response_format = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": schema_dict,
+                    },
+                }
+        elif (
+            llm_request.config
+            and llm_request.config.response_mime_type == "application/json"
+        ):
+            response_format = {"type": "json_object"}
+
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "tools": tools if tools else None,
+            "tool_choice": tool_choice,
+            "max_completion_tokens": self.max_tokens,
+            "response_format": response_format,
+        }
+
+        if llm_request.config:
+            # GPT-5-mini only supports default temperature=1 and top_p=1.
+            # Passing custom values causes a 400 error.
+            if getattr(llm_request.config, "stop_sequences", None):
+                kwargs["stop"] = llm_request.config.stop_sequences
+            if getattr(llm_request.config, "max_output_tokens", None) is not None:
+                kwargs["max_completion_tokens"] = llm_request.config.max_output_tokens
+
+        if not stream:
+            response = await self._openai_client.chat.completions.create(**kwargs)
+            from google.adk.labs.openai._openai_llm import _response_to_llm_response
+            yield _response_to_llm_response(response)
+        else:
+            kwargs["stream"] = True
+            async for response in self._generate_content_streaming(kwargs):
+                yield response
 
 
 def _ensure_dirs() -> None:
@@ -1050,6 +1165,14 @@ _STATIC_INSTRUCTION = (
     "Keep answers structured, grounded, adaptive, and appropriately detailed."
 )
 
+# ``instruction`` must be a serializable string for ADK Web's app-info API.
+# The actual per-turn snapshot is appended by the before-model callback in
+# ``agent_runtime.dynamic_context``.
+_WEB_UI_INSTRUCTION = (
+    "Use the static instruction and the current session context supplied by "
+    "the runtime to answer the user."
+)
+
 
 def _dynamic_instruction(ctx: Any) -> str:
     """Instruction provider: delegate to budget-aware dynamic context.
@@ -1065,55 +1188,46 @@ def _dynamic_instruction(ctx: Any) -> str:
 
 
 root_agent = Agent(
-    model=DeepSeekLlm(),
+    model=OpenAIGPT5Llm(),
     name="research_paper_agent",
     description="Reads research papers, extracts concepts, compares papers, and answers grounded questions.",
     static_instruction=_STATIC_INSTRUCTION,
-    instruction=_dynamic_instruction,
+    instruction=_WEB_UI_INSTRUCTION,
     before_model_callback=_dynamic_ctx.build_before_model_callback(),
     tools=[
-        *_aliased_tool(list_papers, "list_paper", "show_papers"),
+        # Core paper tools
+        _safe_tool(list_papers),
+        _safe_tool(list_concepts),
+        _safe_tool(paper_brief),
+        _safe_tool(ingest_paper),
+        _safe_tool(ingest_all_papers),
+        _safe_tool(search_evidence),
+        _safe_tool(compare_papers),
+        _safe_tool(make_study_guide),
         _safe_tool(rename_paper),
         _safe_tool(delete_paper),
         _safe_tool(organize_papers),
-        *_aliased_tool(ingest_paper, "add_paper", "read_paper"),
-        _safe_tool(ingest_all_papers),
-        *_aliased_tool(list_concepts, "list_concept", "show_concepts"),
-        *_aliased_tool(search_evidence, "search_paper", "find_evidence"),
-        *_aliased_tool(paper_brief, "brief_paper", "summarize_paper"),
-        _safe_tool(compare_papers),
-        *_aliased_tool(make_study_guide, "study_guide", "create_study_guide"),
-        *_aliased_tool(get_user_profile, "show_profile", "my_profile"),
-        _safe_tool(learn_from_user_message),
-        _safe_tool(record_interaction),
-        _safe_tool(set_user_preference),
-        *_aliased_tool(save_personal_note, "save_note", "create_note"),
-        *_aliased_tool(list_personal_notes, "list_notes", "show_notes"),
-        *_aliased_tool(get_personal_note, "get_note", "read_note"),
-        *_aliased_tool(search_personal_notes, "search_notes", "find_notes"),
-        _safe_tool(delete_personal_note),
-        *_aliased_tool(edit_personal_note, "edit_note", "update_note"),
-        _safe_tool(reject_note_card),
-        _safe_tool(reject_note_concept),
+        # Web + audit
+        _safe_tool(search_web),
+        _safe_tool(knowledge_self_audit),
+        # Profile
+        _safe_tool(get_user_profile),
+        # Notes
+        _safe_tool(save_personal_note),
+        _safe_tool(list_personal_notes),
+        _safe_tool(get_personal_note),
         _safe_tool(get_note_backlinks),
         _safe_tool(render_note_markdown),
-        _safe_tool(import_markdown_notes),
-        _safe_tool(add_person),
-        *_aliased_tool(list_people, "list_person", "show_people"),
-        *_aliased_tool(get_person, "show_person", "find_person"),
-        *_aliased_tool(search_people, "search_person", "find_people"),
-        _safe_tool(add_relationship_note),
-        _safe_tool(log_relationship_interaction),
-        _safe_tool(recommend_reconnections),
-        _safe_tool(forget_person),
-        *_aliased_tool(search_web, "web_search", "lookup"),
-        *_aliased_tool(knowledge_self_audit, "audit", "self_audit"),
-        _safe_tool(self_audit_correction),
+        # People
+        _safe_tool(list_people),
+        _safe_tool(get_person),
+        # Tutor
+        _safe_tool(get_tutor_progress),
+        _safe_tool(record_tutor_answer),
+        # Concept graph
+        _safe_tool(concept_graph.get_concept_graph),
+        # Grill
         _safe_tool(adaptive_grill),
         _safe_tool(respond_to_adaptive_grill),
-        _safe_tool(concept_graph.get_concept_graph),
-        _safe_tool(concept_graph.suggest_concept_merges),
-        *_aliased_tool(record_tutor_answer, "grade_answer", "tutor_answer"),
-        *_aliased_tool(get_tutor_progress, "tutor_progress", "show_progress"),
     ],
 )

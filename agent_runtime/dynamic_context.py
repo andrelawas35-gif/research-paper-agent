@@ -73,6 +73,16 @@ _DEEP_PATTERNS: list[str] = [
     r"\b(read|scan)\s+(all\s+)?(papers|documents|files|the\s+folder|papers\s+folder|the\s+papers\s+folder)\b",
 ]
 
+# External lookup needs the ``search_web`` tool, which is deliberately not
+# exposed in the Fast tool surface.  Do not let the generic ``search`` mode
+# keyword below downgrade an explicit web request to Fast mode.
+_EXTERNAL_LOOKUP_PATTERNS: list[str] = [
+    r"\b(?:search|find|browse)\s+(?:the\s+)?(?:web|internet|online)\b",
+    r"\b(?:look\s*up|lookup)\b.*\b(?:web|internet|online)\b",
+    r"\b(?:web|internet|online)\s+(?:search|lookup)\b",
+    r"\bsearch_web\b",
+]
+
 # ── Mode hints that suggest a budget tier ────────────────────────────
 # Only used when no explicit performance wording is found.
 
@@ -214,11 +224,19 @@ def _infer_performance_budget_from_text(text: str, mode_hint: str = "") -> str:
     # 1. Explicit wording wins.
     for pattern in _FAST_PATTERNS:
         if re.search(pattern, lower):
+            # Even a quick external search needs the Balanced tool surface.
+            if any(re.search(lookup, lower) for lookup in _EXTERNAL_LOOKUP_PATTERNS):
+                return BALANCED
             return FAST
 
     for pattern in _DEEP_PATTERNS:
         if re.search(pattern, lower):
             return DEEP
+
+    # An explicit external lookup needs ``search_web`` (a Safe tool), not the
+    # Fast Retrieve surface chosen by the generic ``search`` mode hint.
+    if any(re.search(pattern, lower) for pattern in _EXTERNAL_LOOKUP_PATTERNS):
+        return BALANCED
 
     # 2. Mode hint as tiebreaker.
     hint = mode_hint.lower().strip()
@@ -609,18 +627,21 @@ def write_allowed(action_type: str, budget: str, evidence_strength: str = "expli
 
 
 # ======================================================================
-# ADR 0072 Slice 2: Tool Groups (for before_model_callback filtering)
+# ADR 0072 Slice 2: Tool Groups (for budget classification)
 # ======================================================================
 
 # Tool names grouped by latency and capability scope.
-# Fast: inspection / read-only — safe for any budget.
+# Fast: inspection / read-only — safe for any budget. ``search_web`` stays
+# available here as well: the agent instruction explicitly names it for
+# external lookup, and stripping it from a fast/retrieve turn makes a valid
+# model tool call fail with "Tool 'search_web' not found".
 _FAST_TOOLS: frozenset[str] = frozenset({
     "list_papers", "list_concepts", "paper_brief",
     "get_user_profile", "get_tutor_progress",
     "list_personal_notes", "get_personal_note",
     "list_people", "get_person",
     "get_concept_graph", "get_note_backlinks",
-    "render_note_markdown",
+    "render_note_markdown", "search_web",
 })
 
 # Safe: moderate-latency — search, evidence, recommendations.
@@ -711,7 +732,7 @@ def build_before_model_callback():
 
     The callback:
     1. Infers the budget from the session context.
-    2. Filters tools_dict to only allowed tools for that budget.
+    2. Preserves the complete registered tool surface on every budget tier.
     3. Adjusts generation config (max_tokens, temperature) per budget.
     4. Logs diagnostics outside prompt context.
 
@@ -726,6 +747,15 @@ def build_before_model_callback():
 
     async def _callback(callback_context: Any, llm_request: Any) -> Any:
         try:
+            # ADK Web serializes ``Agent.instruction`` in its app-info API,
+            # which accepts a string but not an InstructionProvider callable.
+            # Keep the published instruction static and append the per-turn
+            # snapshot here instead. This preserves the dynamic context while
+            # allowing the Dev UI to load the agent metadata.
+            dynamic_instruction = build_dynamic_instruction(callback_context)
+            if dynamic_instruction:
+                llm_request.append_instructions([dynamic_instruction])
+
             # Budget inference: use the latest user text from the request.
             budget = BALANCED
             try:
@@ -746,19 +776,12 @@ def build_before_model_callback():
             except Exception:
                 pass  # fall back to balanced
 
-            # Tool filtering.
-            allowed = _allowed_tool_names(budget)
-            tools_dict = getattr(llm_request, "tools_dict", None)
-            if tools_dict is not None:
-                filtered = 0
-                for name in list(tools_dict):
-                    if name not in allowed:
-                        del tools_dict[name]
-                        filtered += 1
-                logger.debug(
-                    "budget_tool_filter: budget=%s allowed=%d filtered=%d",
-                    budget, len(allowed), filtered,
-                )
+            # Do not filter ``tools_dict`` here. A model can legitimately
+            # select any tool registered on the root agent, and deleting it
+            # after declarations are built produces ADK's misleading
+            # "Tool '<name>' not found" error. Budget tiers affect context
+            # and generation controls only; individual tools own their own
+            # validation and authorization boundaries.
 
             # Generation controls.
             config = getattr(llm_request, "config", None)

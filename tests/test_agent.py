@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -523,6 +525,36 @@ class TestBudgetInference:
 
         assert _infer_performance_budget_from_text("hello, what papers do I have?") == "balanced"
 
+    @pytest.mark.parametrize("text", [
+        "search the web for recent agent research",
+        "look up OpenAI documentation online",
+        "quickly search the internet for this",
+        "use search_web to find primary sources",
+    ])
+    def test_external_lookup_uses_balanced_tool_surface(self, text):
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _allowed_tool_names,
+            _infer_performance_budget_from_text,
+        )
+
+        budget = _infer_performance_budget_from_text(text)
+        assert budget == "balanced"
+        assert "search_web" in _allowed_tool_names(budget)
+
+    def test_fast_tool_surface_keeps_search_web_registered(self):
+        """A fast/retrieve turn must not reject the instructed web tool."""
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            _allowed_tool_names,
+        )
+
+        assert "search_web" in _allowed_tool_names("fast")
+
+    def test_root_agent_instruction_is_serializable_for_adk_web(self):
+        """ADK Web's app-info endpoint requires a string instruction."""
+        from research_paper_agent.agent import root_agent
+
+        assert isinstance(root_agent.instruction, str)
+
     def test_mode_hint_suggests_deep(self):
         from research_paper_agent.agent_runtime.dynamic_context import (
             _infer_performance_budget_from_text,
@@ -1039,6 +1071,37 @@ class TestWriteGating:
 
 
 class TestToolGroups:
+    def test_callback_never_removes_registered_tools(self):
+        """A fast turn must retain every tool the root agent registers."""
+        from research_paper_agent.agent_runtime.dynamic_context import (
+            build_before_model_callback,
+        )
+
+        request = SimpleNamespace(
+            contents=[
+                SimpleNamespace(
+                    parts=[SimpleNamespace(text="quickly check my papers")]
+                )
+            ],
+            config=SimpleNamespace(),
+            tools_dict={
+                "list_papers": object(),
+                "search_evidence": object(),
+                "save_personal_note": object(),
+                "adaptive_grill": object(),
+            },
+            append_instructions=lambda _instructions: [],
+        )
+
+        asyncio.run(build_before_model_callback()(SimpleNamespace(), request))
+
+        assert set(request.tools_dict) == {
+            "list_papers",
+            "search_evidence",
+            "save_personal_note",
+            "adaptive_grill",
+        }
+
     def test_fast_tools_are_read_only(self):
         from research_paper_agent.agent_runtime.dynamic_context import _allowed_tool_names
 

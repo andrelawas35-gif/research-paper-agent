@@ -3,7 +3,9 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
-const apiTarget = process.env.VITE_API_TARGET || 'http://localhost:8000';
+// Keep ADK Web on its conventional local port (8000). The PKM API uses 8001
+// during local development; production routing is handled by Caddy instead.
+const apiTarget = process.env.VITE_API_TARGET || 'http://localhost:8001';
 
 export default defineConfig({
   plugins: [

@@ -509,6 +509,12 @@ An Agent Mode for one-question-at-a-time pressure testing of papers, plans, beli
 
 An Agent Mode for operational management of the Personal Knowledge Manager, including settings, imports, exports, sync, deletion, purging, backups, health checks, migrations, deployment, secrets, model/backend config, API/mobile surfaces, and storage health.
 
+## Post-Deployment Surface Recovery Runbook
+
+The operational reference at `docs/post-deployment-fixes.md` for verifying and
+recovering the PWA, local API, ADK Web, ADK CLI, and optional Discord launcher
+after a deployment or local configuration change.
+
 ## Session Goal
 
 The user's current task or purpose for a Personal Knowledge Manager interaction, which takes priority over long-term profile preferences.

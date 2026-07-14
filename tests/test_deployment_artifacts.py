@@ -14,6 +14,13 @@ def test_api_and_web_are_loopback_only() -> None:
     assert "0.0.0.0" not in service + caddy
 
 
+def test_local_pwa_proxy_does_not_collide_with_adk_web() -> None:
+    vite = (ROOT / "frontend/vite.config.ts").read_text()
+    # ADK Web conventionally uses port 8000. Keep the local PWA proxy pointed
+    # at the separate FastAPI process so both surfaces can run together.
+    assert "http://localhost:8001" in vite
+
+
 def test_deploy_requires_supported_python_and_node_minimum() -> None:
     installer = (ROOT / "deploy/install-oracle-vm.sh").read_text()
     assert "(3, 12)" in installer

@@ -36,22 +36,52 @@ In this local Codex workspace, the bundled Python 3.12 runtime works:
 
 2. Put source documents in `papers/`.
 3. Copy `.env.example` to `.env`.
-4. Add the model credential required by the runtime you are using. The hardened
-   PWA deployment uses an OpenAI API key; the legacy ADK launcher retains its
-   existing OpenAI-compatible model configuration.
+4. Add `OPENAI_API_KEY` to `.env`. The CLI and Discord bot both load this same
+   project-local file and use `OPENAI_GPT5_MINI_MODEL` (default: `gpt-5-mini`).
+   `OPENAI_GPT5_MODEL` (default: `gpt-5`) remains available for policy-gated
+   runtime workflows.
 5. From the parent folder, run:
 
 ```bash
 research_paper_agent/.venv/bin/adk run research_paper_agent
 ```
 
-For a browser UI:
+## Local surfaces
+
+The ADK tools, CLI, and PWA can run together. In local development, port
+`8000` belongs to ADK Web and port `8001` belongs to the PKM FastAPI service.
+
+Start the PKM API from the project directory:
 
 ```bash
-research_paper_agent/.venv/bin/adk web .
+.venv/bin/uvicorn agent_runtime.asgi:create_local_app --factory --host 127.0.0.1 --port 8001
 ```
 
-The launcher creates `.adk` storage and passes explicit SQLite/artifact paths to ADK. Use it if the web UI reports `sqlite3.OperationalError: unable to open database file`.
+Start the PWA in a second terminal:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Then open `http://127.0.0.1:5173`. The development proxy forwards its `/api`
+and `/health` calls to port 8001.
+
+`create_local_app` uses local owner-only file record keys under `PKM_DATA_DIR`.
+It is for development only; production continues to require OCI-backed
+per-record key custody through `create_production_app`.
+
+For post-deployment checks and recovery across the PWA, API, ADK, CLI, and
+Discord surfaces, see [the post-deployment fixes runbook](docs/post-deployment-fixes.md).
+
+For the separate ADK browser UI, run this from the project directory:
+
+```bash
+.venv/bin/adk web .
+```
+
+Open `http://127.0.0.1:8000/dev-ui/`. The ADK Web UI and CLI use the same
+agent tool registry; the PWA API is a separate service.
 
 ## Useful Prompts
 
@@ -225,9 +255,9 @@ The production PWA uses OpenAI through `agent_runtime.asgi`. Configure
 when that key or the upstream service is unavailable. Optional model overrides
 are `OPENAI_GPT5_MINI_MODEL` and `OPENAI_GPT5_MODEL`.
 
-The original Google ADK launcher is a separate compatibility path and retains
-its OpenAI-compatible provider configuration. See `.env.example` for supported
-variables; never commit real credentials.
+The Google ADK CLI and Discord launcher use the same project-local OpenAI
+configuration. See `.env.example` for supported variables; never commit real
+credentials.
 
 ## PDF Support
 
